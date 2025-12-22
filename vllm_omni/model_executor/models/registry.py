@@ -1,6 +1,37 @@
-from vllm.model_executor.models.registry import _VLLM_MODELS, _LazyRegisteredModel, _ModelRegistry
+from vllm.model_executor.models.registry import _VLLM_MODELS, _LazyRegisteredModel, _ModelRegistry, ModelRegistry
+
+from vllm_omni.model_executor.models.mimo_audio.mimo_audio import MiMoAudioForConditionalGeneration
+from vllm_omni.model_executor.models.mimo_audio.mimo_audio_code2wav import (
+    MiMoAudioToken2WavForConditionalGenerationVLLM,
+)
+from vllm_omni.model_executor.models.mimo_audio.mimo_audio_llm import MiMoAudioLLMForConditionalGeneration
+
+
+def reg_model():
+    ModelRegistry.register_model("MiMoAudioModel", MiMoAudioForConditionalGeneration)
+    ModelRegistry.register_model("MiMoAudioLLMModel", MiMoAudioLLMForConditionalGeneration)
+    ModelRegistry.register_model("MiMoAudioToken2WavModel", MiMoAudioToken2WavForConditionalGenerationVLLM)
+
+
+reg_model()
 
 _OMNI_MODELS = {
+    ## mimo_audio
+    "MiMoAudioModel": (
+        "mimo_audio",
+        "mimo_audio",
+        "MiMoAudioForConditionalGeneration",
+    ),
+    "MiMoAudioLLMModel": (
+        "mimo_audio",
+        "mimo_audio_llm",
+        "MiMoAudioLLMForConditionalGeneration",
+    ),
+    "MiMoAudioToken2WavModel": (
+        "mimo_audio",
+        "mimo_audio_code2wav",
+        "MiMoAudioToken2WavForConditionalGenerationVLLM",
+    ),
     "Qwen2_5OmniForConditionalGeneration": (
         "qwen2_5_omni",
         "qwen2_5_omni",
