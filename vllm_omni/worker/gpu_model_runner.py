@@ -563,7 +563,7 @@ class OmniGPUModelRunner(GPUModelRunner):
                     ubatch_slices=ubatch_slices,
                 ),
             ):
-                if self.talker_mtp is not None and num_tokens_padded == 1:
+                if getattr(self, "talker_mtp", None) is not None and num_tokens_padded == 1:
                     outputs = self.talker_mtp(
                         self.talker_mtp_input_ids.gpu[:num_tokens_padded],
                         self.talker_mtp_inputs_embeds.gpu[:num_tokens_padded],
