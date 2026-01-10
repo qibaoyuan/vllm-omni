@@ -13,6 +13,8 @@ from vllm.model_executor.models.interfaces_base import VllmModelForPooling
 from vllm.sampling_params import SamplingType
 from vllm.utils.import_utils import LazyLoader
 from vllm.utils.math_utils import cdiv
+from vllm.multimodal.inputs import MultiModalKwargsItem, PlaceholderRange, MultiModalFieldElem, MultiModalBatchedField
+from vllm.utils import length_from_prompt_token_ids_or_embeds
 from vllm.v1.spec_decode.eagle import EagleProposer
 from vllm.v1.worker.gpu_input_batch import CachedRequestState
 from vllm.v1.worker.gpu_model_runner import GPUModelRunner, IntermediateTensors, PerLayerAttnMetadata
@@ -563,7 +565,7 @@ class OmniGPUModelRunner(GPUModelRunner):
                     ubatch_slices=ubatch_slices,
                 ),
             ):
-                if self.model.talker is not None and hasattr(self.model, "talker_mtp") and num_tokens_padded == 1:
+                if getattr(self, "talker_mtp", None) is not None and num_tokens_padded == 1:
                     outputs = self.talker_mtp(
                         self.talker_mtp_input_ids.gpu[:num_tokens_padded],
                         self.talker_mtp_inputs_embeds.gpu[:num_tokens_padded],
@@ -703,6 +705,7 @@ class OmniGPUModelRunner(GPUModelRunner):
         model_kwargs_extra: dict[str, object] = {}
         try:
             model_kwargs_extra["runtime_additional_information"] = self._gather_runtime_additional_information()
+            model_kwargs_extra["request_ids"] = self.input_batch.req_ids  # Request_ids param is used for MiMo-Audio
         except Exception as e:
             logger.error(f"[OMNI DEBUG] Error building model_kwargs_extra: {e}")
             import traceback
@@ -988,3 +991,54 @@ class OmniGPUModelRunner(GPUModelRunner):
             else:
                 merged[k] = v
         setattr(req_state, "additional_information_cpu", merged)
+
+    def _batch_mm_kwargs_from_scheduler(
+        self,
+        scheduler_output: "SchedulerOutput",
+    ) -> tuple[list[MultiModalKwargsItem], list[tuple[str, PlaceholderRange]]]:
+        """Batch multimodal kwargs from scheduled encoder inputs.
+
+        Args:
+            scheduler_output: The scheduler output containing scheduled encoder
+                inputs.
+
+        Returns:
+            A tuple of (mm_kwargs, req_ids_pos) where:
+            - mm_kwargs: List of multimodal kwargs items to be batched
+            - mm_hashes_pos: List of (mm_hash, position_info) tuples
+        """
+        model_name = getattr(self.vllm_config.model_config, "model", "").split("/")[-1]
+        if model_name and "MiMo-Audio" in model_name:
+            scheduled_encoder_inputs = scheduler_output.scheduled_encoder_inputs
+            if not scheduled_encoder_inputs:
+                return [], []
+            # Batch the multi-modal inputs.
+            mm_kwargs = list[MultiModalKwargsItem]()
+            # list of tuple (mm_hash, position_info)
+            mm_hashes_pos = list[tuple[str, PlaceholderRange]]()
+            for req_id, encoder_input_ids in scheduled_encoder_inputs.items():
+                req_state = self.requests[req_id]
+
+                for mm_input_id in encoder_input_ids:
+                    mm_feature = req_state.mm_features[mm_input_id]
+                    mm_hash = mm_feature.identifier
+                    mm_item = mm_feature.data
+                    if mm_item is not None:
+                        mm_item["prompt_ids"] = MultiModalFieldElem(
+                            modality=mm_item.modality,
+                            key="prompt_ids",
+                            data=req_state.prompt_token_ids,
+                            field=MultiModalBatchedField(),
+                        )
+                        mm_item["mm_offset"] = MultiModalFieldElem(
+                            modality=mm_item.modality,
+                            key="mm_offset",
+                            data=mm_feature.mm_position.offset,
+                            field=MultiModalBatchedField(),
+                        )
+                    mm_kwargs.append(mm_item)
+                    mm_hashes_pos.append((mm_hash, mm_feature.mm_position))
+
+            return mm_kwargs, mm_hashes_pos
+        else:
+            return super()._batch_mm_kwargs_from_scheduler(scheduler_output)

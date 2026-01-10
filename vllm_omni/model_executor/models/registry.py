@@ -48,6 +48,22 @@ _OMNI_MODELS = {
         "qwen3_omni_code2wav",
         "Qwen3OmniMoeCode2Wav",
     ),
+    ## mimo_audio
+    "MiMoAudioModel": (
+        "mimo_audio",
+        "mimo_audio",
+        "MiMoAudioForConditionalGeneration",
+    ),
+    "MiMoAudioLLMModel": (
+        "mimo_audio",
+        "mimo_audio_llm",
+        "MiMoAudioLLMForConditionalGeneration",
+    ),
+    "MiMoAudioToken2WavModel": (
+        "mimo_audio",
+        "mimo_audio_code2wav",
+        "MiMoAudioToken2WavForConditionalGenerationVLLM",
+    ),
 }
 
 _VLLM_OMNI_MODELS = {
