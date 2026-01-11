@@ -305,11 +305,7 @@ def main(args):
         model=model_name,
         stage_configs_path=args.stage_configs_path,
         log_stats=args.enable_stats,
-        log_file=(
-            "omni_llm_pipeline.log"
-            if args.enable_stats
-            else None
-        ),
+        log_file=("omni_llm_pipeline.log" if args.enable_stats else None),
         init_sleep_seconds=args.init_sleep_seconds,
         batch_timeout=args.batch_timeout,
         init_timeout=args.init_timeout,
