@@ -9,6 +9,7 @@ TALKER_CODEC_PAD_TOKEN_ID = 8292
 TALKER_CODEC_START_TOKEN_ID = 8293
 TALKER_CODEC_END_TOKEN_ID = 8294
 
+
 def prepend_and_flatten_colmajor(x: torch.Tensor, pad_vec: torch.Tensor):
     """
     Prepend a padding vector to the input tensor and flatten in column-major order.
@@ -84,12 +85,9 @@ def llm2code2wav(
     for i, talker_output in enumerate(talker_outputs):
         output = talker_output.outputs[0]
 
-
         # Extract codec codes from talker output
         # Expected shape: [8, seq_len] (8-layer RVQ codes)
         codec_codes = output.multimodal_output["code"].to(torch.long)
-
-
 
         pad_vec = torch.tensor([151667, 151667, 151667, 151667])
 
@@ -98,8 +96,6 @@ def llm2code2wav(
 
         code_final = prepend_and_flatten_colmajor(codec_codes, pad_vec)
         code_final = code_final.tolist()
-
-
 
         code2wav_inputs.append(
             OmniTokensPrompt(
