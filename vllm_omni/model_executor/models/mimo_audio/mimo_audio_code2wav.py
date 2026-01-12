@@ -61,7 +61,9 @@ class MiMoAudioTokenizerWorker:
         self.audio_tokenizer.eval().bfloat16().to(self.device)
 
         logger.info(
-            f"Audio Tokenizers loaded in {time.monotonic() - start_loading_slm_tokenizer_time:.2f} seconds, device: {self.device}"
+            f"Audio Tokenizers loaded in "
+            f"{time.monotonic() - start_loading_slm_tokenizer_time:.2f} seconds, "
+            f"device: {self.device}"
         )
 
         logger.info(

@@ -1,19 +1,9 @@
 # Copyright 2025 Xiaomi Corporation.
 import math
+from dataclasses import dataclass, field
 
 import torch
 import torch.nn as nn
-
-is_flash_atth_available = False
-try:
-    from flash_attn import flash_attn_varlen_func
-
-    is_flash_atth_available = True
-except:
-    print("flash_attn not installed")
-    pass
-from dataclasses import dataclass, field
-
 from torch.nn import functional as F
 from transformers.activations import ACT2FN
 from transformers.modeling_utils import PreTrainedModel
@@ -21,6 +11,15 @@ from transformers.modeling_utils import PreTrainedModel
 from .configuration_audio_tokenizer import MiMoAudioTokenizerConfig
 from .modeling_rope_utils import ROPE_INIT_FUNCTIONS, apply_rotary_pos_emb, dynamic_rope_update
 from .quantization import ResidualVectorQuantizer
+
+is_flash_atth_available = False
+try:
+    from flash_attn import flash_attn_varlen_func
+
+    is_flash_atth_available = True
+except Exception:
+    print("flash_attn not installed")
+    pass
 
 
 def get_sequence_mask(inputs, inputs_length):
@@ -706,10 +705,8 @@ class AudioDecoder(nn.Module):
 
         if self.dconv1 is not None:
             audio_embed, output_length = self.dconv1(audio_embed, input_length, output_dim=3)
-            _, tgt_len, _ = audio_embed.size()
         else:
             output_length = input_length
-            tgt_len = audio_embed.size(0)
 
         hidden_states = audio_embed
 

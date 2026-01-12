@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import math
+from collections.abc import Callable
 from functools import wraps
 from typing import Optional
 
@@ -27,7 +28,7 @@ if is_torch_available():
     import torch
 
 
-def dynamic_rope_update(rope_forward):
+def dynamic_rope_update(rope_forward: Callable) -> Callable:
     """
     Decorator function to update the RoPE parameters in the forward pass, if the model is using a dynamic RoPE
     (i.e. a RoPE implementation that may recompute its frequencies in the forward pass).

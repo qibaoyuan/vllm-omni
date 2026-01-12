@@ -63,5 +63,3 @@ python openai_chat_completion_client_for_multimodal_generation.py \
 --query-type multi_audios \
 --message-json Path/message_base64_wav.json
 ```
-
-

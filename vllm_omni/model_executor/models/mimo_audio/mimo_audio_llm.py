@@ -3,7 +3,7 @@
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal
 
 import torch
 import torch.nn as nn
@@ -131,7 +131,7 @@ class Qwen2AudioEmbeddingInputs(TensorSchema):
     audio_embeds: list[torch.Tensor]
 
 
-Qwen2AudioInputs = Union[Qwen2AudioFeatureInputs, Qwen2AudioEmbeddingInputs]
+Qwen2AudioInputs = Qwen2AudioFeatureInputs | Qwen2AudioEmbeddingInputs
 
 
 # === Audio Encoder === #
