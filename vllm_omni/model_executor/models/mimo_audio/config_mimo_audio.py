@@ -1,7 +1,6 @@
 # Copyright 2025 Xiaomi Corporation.
 import copy
 from dataclasses import dataclass
-from typing import List
 
 from transformers import Qwen2Config
 
@@ -50,7 +49,7 @@ class MiMoAudioConfig(Qwen2Config):
 
         self.input_full_attention = input_full_attention
 
-    def _parse_maybe_list(self, value: str | int, length: int) -> List[int]:
+    def _parse_maybe_list(self, value: str | int, length: int) -> list[int]:
         if isinstance(value, str) and "-" in value:
             return [int(s) for s in value.split("-")]
         return [int(value)] * length

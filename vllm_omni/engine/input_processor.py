@@ -1,7 +1,6 @@
 import time
 from collections.abc import Mapping
 from typing import Any, cast
-from typing import Any, Optional, Union, List, Tuple
 
 import torch
 from vllm.config import VllmConfig
@@ -31,7 +30,7 @@ logger = init_logger(__name__)
 
 
 def interleave_5_and_5_in_span(
-    input_ids: List[int],
+    input_ids: list[int],
     *,
     span_start_token: int = 151670,
     span_end_token: int = 151672,
@@ -39,12 +38,12 @@ def interleave_5_and_5_in_span(
     text_group_size: int = 5,
     pad_group_size: int = 5,
     no_interleave_next_token: int = 151671,
-) -> List[int]:
+) -> list[int]:
     if not input_ids:
         return input_ids
 
     original_len = len(input_ids)
-    output_ids: List[int] = []
+    output_ids: list[int] = []
     cursor = 0
 
     while cursor < original_len:
@@ -87,7 +86,7 @@ def interleave_5_and_5_in_span(
         span_original_len = len(span_content)
         span_text_tokens = [t for t in span_content if t != pad_token_id]
 
-        rebuilt_span: List[int] = []
+        rebuilt_span: list[int] = []
         text_cursor = 0
         total_text = len(span_text_tokens)
 

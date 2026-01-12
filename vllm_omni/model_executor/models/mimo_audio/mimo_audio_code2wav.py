@@ -4,7 +4,6 @@ import os
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Optional, Union, List
 
 import torch
 import torchaudio
@@ -157,8 +156,8 @@ class MiMoAudioTokenizerWorker:
     @torch.inference_mode()
     def encode_batch_base(
         self,
-        feature_groups: List[torch.Tensor],
-        len_groups: List[torch.Tensor],
+        feature_groups: list[torch.Tensor],
+        len_groups: list[torch.Tensor],
     ) -> torch.Tensor:
         """Run this in cuda stream if available"""
         encoded_parts = []
@@ -295,7 +294,7 @@ def extract_audio_code_tensor(
     group_size: int,
     audio_channels: int,
     codes: MiMoAudioCodes,
-) -> Optional[torch.Tensor]:
+) -> torch.Tensor | None:
     """Convert flattened talker output into [audio_channels, T] codes."""
     if flat_codes.numel() == 0:
         return None
@@ -382,7 +381,7 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
             or self.config.name_or_path
         )
 
-        self._tokenizer_service: Optional[MiMoAudioTokenizerWorker] = _get_tokenizer_worker(
+        self._tokenizer_service: MiMoAudioTokenizerWorker | None = _get_tokenizer_worker(
             device=self.device,
             config_path=self.tokenizer_config_path,
             audio_tokenizer_path=self.audio_tokenizer_path,
@@ -405,10 +404,10 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
 
     def forward(
         self,
-        input_ids: Optional[torch.Tensor] = None,
-        codes: Optional[torch.Tensor] = None,
+        input_ids: torch.Tensor | None = None,
+        codes: torch.Tensor | None = None,
         **kwargs,
-    ) -> Union[torch.Tensor, IntermediateTensors]:
+    ) -> torch.Tensor | IntermediateTensors:
         # Support both input_ids (from vLLM) and codes (from mimo_audio.py)
         code_tensor = codes if codes is not None else input_ids
 
@@ -452,9 +451,9 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
 
     def _get_full_code_sequence(
         self,
-        code_tensor: Optional[torch.Tensor],
+        code_tensor: torch.Tensor | None,
         kwargs: dict,
-    ) -> Optional[torch.Tensor]:
+    ) -> torch.Tensor | None:
         """Gather the full prompt token ids (code sequence) if available."""
         if code_tensor is not None and code_tensor.numel() > 1:
             return code_tensor
@@ -549,7 +548,7 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
     def compute_logits(
         self,
         hidden_states: torch.Tensor,
-    ) -> Optional[torch.Tensor]:
+    ) -> torch.Tensor | None:
         # code2wav stage does not need actual logits, but needs to return a valid tensor
         # Return a dummy logits tensor with shape [batch_size, vocab_size]
         if hidden_states.numel() == 0:
@@ -571,7 +570,7 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
         self,
         logits: torch.Tensor,
         sampling_metadata: SamplingMetadata,
-    ) -> Optional[SamplerOutput]:
+    ) -> SamplerOutput | None:
         # code2wav stage does not need sampling, but needs to return a valid SamplerOutput to avoid CUDA errors
         # Use Sampler to handle sampling, even though the result will not be used
         if logits is None or logits.numel() == 0:

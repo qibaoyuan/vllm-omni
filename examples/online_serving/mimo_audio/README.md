@@ -38,9 +38,9 @@ cd examples/online_serving/mimo_audio
 ####  Send request via python
 
 ```bash
-# Audio dialogue task 
+# Audio dialogue task
 python openai_chat_completion_client_for_multimodal_generation.py \
---query-type multi_audios 
+--query-type multi_audios
 ```
 
 The Python client supports the following command-line arguments:
@@ -64,4 +64,4 @@ python openai_chat_completion_client_for_multimodal_generation.py \
 --message-json Path/message_base64_wav.json
 ```
 
- 
+

@@ -1,10 +1,9 @@
 import base64
 import json
 import os
-from typing import Optional, List, Dict, Any, Union
+from typing import Any
 
 import requests
-import torch
 from openai import OpenAI
 from vllm.assets.audio import AudioAsset
 from vllm.utils.argparse_utils import FlexibleArgumentParser
@@ -12,7 +11,6 @@ from vllm.utils.argparse_utils import FlexibleArgumentParser
 # Modify OpenAI's API key and API base to use vLLM's API server.
 openai_api_key = "EMPTY"
 openai_api_base = "http://localhost:8080/v1"
-import os
 
 client = OpenAI(
     # defaults to os.environ.get("OPENAI_API_KEY")
@@ -41,7 +39,7 @@ def encode_base64_content_from_file(file_path: str) -> str:
     return result
 
 
-def get_video_url_from_path(video_path: Optional[str]) -> str:
+def get_video_url_from_path(video_path: str | None) -> str:
     """Convert a video path (local file or URL) to a video URL format for the API.
 
     If video_path is None or empty, returns the default URL.
@@ -80,7 +78,7 @@ def get_video_url_from_path(video_path: Optional[str]) -> str:
     return f"data:{mime_type};base64,{video_base64}"
 
 
-def get_image_url_from_path(image_path: Optional[str]) -> str:
+def get_image_url_from_path(image_path: str | None) -> str:
     """Convert an image path (local file or URL) to an image URL format for the API.
 
     If image_path is None or empty, returns the default URL.
@@ -117,7 +115,7 @@ def get_image_url_from_path(image_path: Optional[str]) -> str:
     return f"data:{mime_type};base64,{image_base64}"
 
 
-def get_audio_url_from_path(audio_path: Optional[str]) -> str:
+def get_audio_url_from_path(audio_path: str | None) -> str:
     """Convert an audio path (local file or URL) to an audio URL format for the API.
 
     If audio_path is None or empty, returns the default URL.
@@ -161,14 +159,14 @@ def get_audio_url_from_path(audio_path: Optional[str]) -> str:
     return f"data:{mime_type};base64,{audio_base64}"
 
 
-def load_messages_from_json(message_json_path: str) -> Dict[str, Any]:
+def load_messages_from_json(message_json_path: str) -> dict[str, Any]:
     """Load messages from a JSON file."""
-    with open(message_json_path, "r", encoding="utf-8") as f:
+    with open(message_json_path, encoding="utf-8") as f:
         data = json.load(f)
     return data
 
 
-def process_audio_url_in_content(content: Dict[str, Any]) -> Dict[str, Any]:
+def process_audio_url_in_content(content: dict[str, Any]) -> dict[str, Any]:
     """Process audio_url in content, handling both file paths and base64 URLs."""
     if content.get("type") == "audio_url":
         audio_url = content.get("audio_url", {}).get("url")
@@ -180,7 +178,7 @@ def process_audio_url_in_content(content: Dict[str, Any]) -> Dict[str, Any]:
     return content
 
 
-def get_system_prompt(message_json_path: Optional[str] = None):
+def get_system_prompt(message_json_path: str | None = None):
     """Get system prompt, optionally from message.json file."""
     if message_json_path and os.path.exists(message_json_path):
         data = load_messages_from_json(message_json_path)
@@ -199,7 +197,7 @@ def get_system_prompt(message_json_path: Optional[str] = None):
                 }
 
 
-def get_text_query(custom_prompt: Optional[str] = None):
+def get_text_query(custom_prompt: str | None = None):
     question = f"请将这段文字转换为语音: {custom_prompt}"
     prompt = {
         "role": "user",
@@ -214,10 +212,10 @@ def get_text_query(custom_prompt: Optional[str] = None):
 
 
 def get_multi_audios_query(
-    audio_path: Optional[str] = None,
-    custom_prompt: Optional[str] = None,
-    message_json_path: Optional[str] = None,
-) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
+    audio_path: str | None = None,
+    custom_prompt: str | None = None,
+    message_json_path: str | None = None,
+) -> list[dict[str, Any]] | dict[str, Any]:
     """Get multi-audios query, optionally from message.json file."""
     if message_json_path and os.path.exists(message_json_path):
         data = load_messages_from_json(message_json_path)

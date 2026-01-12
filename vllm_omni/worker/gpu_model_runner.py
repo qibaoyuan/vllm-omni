@@ -10,11 +10,10 @@ from vllm.logger import init_logger
 from vllm.model_executor.layers.rotary_embedding import MRotaryEmbedding
 from vllm.model_executor.models.interfaces import supports_mrope
 from vllm.model_executor.models.interfaces_base import VllmModelForPooling
+from vllm.multimodal.inputs import MultiModalBatchedField, MultiModalFieldElem, MultiModalKwargsItem, PlaceholderRange
 from vllm.sampling_params import SamplingType
 from vllm.utils.import_utils import LazyLoader
 from vllm.utils.math_utils import cdiv
-from vllm.multimodal.inputs import MultiModalKwargsItem, PlaceholderRange, MultiModalFieldElem, MultiModalBatchedField
-from vllm.utils import length_from_prompt_token_ids_or_embeds
 from vllm.v1.spec_decode.eagle import EagleProposer
 from vllm.v1.worker.gpu_input_batch import CachedRequestState
 from vllm.v1.worker.gpu_model_runner import GPUModelRunner, IntermediateTensors, PerLayerAttnMetadata

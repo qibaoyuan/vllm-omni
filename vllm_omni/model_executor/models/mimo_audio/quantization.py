@@ -114,7 +114,7 @@ class EuclideanCodebook(nn.Module):
     ):
         super().__init__()
         self.decay = decay
-        init_fn: tp.Union[tp.Callable[..., torch.Tensor], tp.Any] = uniform_init if not kmeans_init else torch.zeros
+        init_fn: tp.Callable[..., torch.Tensor] | tp.Any = uniform_init if not kmeans_init else torch.zeros
         embed = init_fn(codebook_size, dim)
 
         self.codebook_size = codebook_size
@@ -238,7 +238,7 @@ class VectorQuantization(nn.Module):
         self,
         dim: int,
         codebook_size: int,
-        codebook_dim: tp.Optional[int] = None,
+        codebook_dim: int | None = None,
         decay: float = 0.99,
         epsilon: float = 1e-5,
         kmeans_init: bool = True,
@@ -319,7 +319,7 @@ class ResidualVectorQuantization(nn.Module):
             [VectorQuantization(codebook_size=codebook_size[i], **kwargs) for i in range(num_quantizers)]
         )
 
-    def forward(self, x, n_q: tp.Optional[int] = None, layers: tp.Optional[list] = None):
+    def forward(self, x, n_q: int | None = None, layers: list | None = None):
         quantized_out = 0.0
         residual = x
 
@@ -342,7 +342,7 @@ class ResidualVectorQuantization(nn.Module):
         out_losses, out_indices = map(torch.stack, (all_losses, all_indices))
         return quantized_out, out_indices, out_losses, out_quantized
 
-    def encode(self, x: torch.Tensor, n_q: tp.Optional[int] = None, st: tp.Optional[int] = None) -> torch.Tensor:
+    def encode(self, x: torch.Tensor, n_q: int | None = None, st: int | None = None) -> torch.Tensor:
         residual = x
         all_indices = []
         n_q = len(self.layers) if n_q is None else n_q
@@ -409,8 +409,8 @@ class ResidualVectorQuantizer(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        n_q: tp.Optional[int] = None,
-        layers: tp.Optional[list] = None,
+        n_q: int | None = None,
+        layers: list | None = None,
     ):
         """Residual vector quantization on the given input tensor.
         Args:
@@ -426,7 +426,7 @@ class ResidualVectorQuantizer(nn.Module):
         quantized, codes, commit_loss, quantized_list = self.vq(x, n_q=n_q, layers=layers)
         return quantized, codes, torch.mean(commit_loss), quantized_list
 
-    def encode(self, x: torch.Tensor, n_q: tp.Optional[int] = None, st: tp.Optional[int] = None) -> torch.Tensor:
+    def encode(self, x: torch.Tensor, n_q: int | None = None, st: int | None = None) -> torch.Tensor:
         """Encode a given input tensor with the specified sample rate at the given bandwidth.
         The RVQ encode method sets the appropriate number of quantizer to use
         and returns indices for each quantizer.

@@ -1,31 +1,27 @@
 # Copyright 2025 Xiaomi Corporation.
 import os
 import time
-import numpy as np
 from collections.abc import Iterable, Mapping, Sequence
 from functools import cached_property
-from typing import Optional, Union, Any, List
+from typing import Any
 
+import numpy as np
 import torch
 from torch import nn
-from transformers import Qwen2Config, BatchFeature
+from transformers import BatchFeature, Qwen2Config
 from vllm.config import VllmConfig
-import traceback
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
-from vllm_omni.model_executor.custom_process_mixin import CustomProcessMixin
-from vllm.multimodal.inputs import AudioItem, ModalityData
 from vllm.model_executor.models import SupportsPP
-from vllm.model_executor.models.utils import init_vllm_registered_model, maybe_prefix
-from vllm.sequence import IntermediateTensors
-from vllm.v1.sample.metadata import SamplingMetadata
-from vllm.v1.sample.sampler import Sampler
-
-from transformers.models.qwen2_audio import Qwen2AudioProcessor
-from vllm_omni.model_executor.models.mimo_audio.config_mimo_audio import MiMoAudioConfig
-from vllm_omni.model_executor.models.qwen2_5_omni.qwen2_5_omni import OmniOutput
-from vllm_omni.model_executor.models.mimo_audio.mimo_audio_code2wav import MiMoAudioTokenizerWorker
-from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.model_executor.models.interfaces import SupportsMultiModal
+from vllm.model_executor.models.utils import init_vllm_registered_model
+from vllm.multimodal import MULTIMODAL_REGISTRY
+from vllm.multimodal.inputs import (
+    AudioItem,
+    ModalityData,
+    MultiModalDataDict,
+    MultiModalFieldConfig,
+    MultiModalKwargs,
+)
 from vllm.multimodal.parse import AudioProcessorItems, MultiModalDataItems, MultiModalDataParser
 from vllm.multimodal.processing import (
     BaseMultiModalProcessor,
@@ -35,13 +31,16 @@ from vllm.multimodal.processing import (
     PromptUpdateDetails,
 )
 from vllm.multimodal.profiling import BaseDummyInputsBuilder, ProcessorInputs
+from vllm.sequence import IntermediateTensors
 from vllm.utils.cache import LRUCache
-from vllm.multimodal.inputs import (
-    MultiModalDataDict,
-    MultiModalFieldConfig,
-    MultiModalKwargs,
-)
-from vllm.utils.collection_utils import as_iter, is_list_of
+from vllm.utils.collection_utils import is_list_of
+from vllm.v1.sample.metadata import SamplingMetadata
+from vllm.v1.sample.sampler import Sampler
+
+from vllm_omni.model_executor.custom_process_mixin import CustomProcessMixin
+from vllm_omni.model_executor.models.mimo_audio.config_mimo_audio import MiMoAudioConfig
+from vllm_omni.model_executor.models.mimo_audio.mimo_audio_code2wav import MiMoAudioTokenizerWorker
+from vllm_omni.model_executor.models.qwen2_5_omni.qwen2_5_omni import OmniOutput
 
 _TOKENIZER_WORKER_CACHE: dict[tuple[str, str, str], MiMoAudioTokenizerWorker] = {}
 
@@ -71,7 +70,7 @@ class MiMoAudioLLMProcessingInfo(
         self,
         *,
         # Ignored in initialization
-        sampling_rate: Optional[int] = None,
+        sampling_rate: int | None = None,
         **kwargs: object,
     ):
         # MiMoAudio doesn't use a standard HF processor like Qwen2Audio
@@ -84,14 +83,14 @@ class MiMoAudioLLMProcessingInfo(
         self,
         *,
         # Ignored in initialization
-        sampling_rate: Optional[int] = None,
+        sampling_rate: int | None = None,
     ):
         # MiMoAudio uses MiMoAudioTokenizer instead of WhisperFeatureExtractor
         # This method may need to return the tokenizer or None
         # depending on the actual implementation requirements
         return None
 
-    def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
+    def get_supported_mm_limits(self) -> Mapping[str, int | None]:
         return {"audio": None}
 
     def get_mm_max_tokens_per_item(
@@ -409,13 +408,13 @@ class MiMoAudioForConditionalGeneration(
     }
 
     @classmethod
-    def get_placeholder_str(cls, modality: str, i: int) -> Optional[str]:
+    def get_placeholder_str(cls, modality: str, i: int) -> str | None:
         if modality.startswith("image"):
             return "<|vision_start|><|IMAGE|><|vision_end|>"
         if modality.startswith("video"):
             return "<|vision_start|><|VIDEO|><|vision_end|>"
         if modality.startswith("audio"):
-            return f"<|sosp|><|empty|><|eosp|>"
+            return "<|sosp|><|empty|><|eosp|>"
 
     def __init__(
         self,
@@ -494,8 +493,8 @@ class MiMoAudioForConditionalGeneration(
     def move_submodules_to_devices(
         self,
         *,
-        llm_device: Optional[Union[str, torch.device]] = None,
-        token2wav_device: Optional[Union[str, torch.device]] = None,
+        llm_device: str | torch.device | None = None,
+        token2wav_device: str | torch.device | None = None,
     ) -> None:
         """Optionally move thinker/talker/token2wav to different devices.
 
@@ -612,17 +611,17 @@ class MiMoAudioForConditionalGeneration(
         self,
         input_ids: torch.Tensor,
         positions: torch.Tensor,
-        intermediate_tensors: Optional[IntermediateTensors] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
+        intermediate_tensors: IntermediateTensors | None = None,
+        inputs_embeds: torch.Tensor | None = None,
         generate_audio: bool = True,
         voice_type: str = "柚子",
-        codec: Optional[torch.Tensor] = None,
-        sampling_metadata: Optional[SamplingMetadata] = None,
-        logits_index: Optional[int] = None,
+        codec: torch.Tensor | None = None,
+        sampling_metadata: SamplingMetadata | None = None,
+        logits_index: int | None = None,
         sampler=None,
-        additional_information: Optional[dict[str, object]] = None,
+        additional_information: dict[str, object] | None = None,
         **kwargs: object,
-    ) -> Union[torch.Tensor, IntermediateTensors, OmniOutput]:
+    ) -> torch.Tensor | IntermediateTensors | OmniOutput:
         """
         Workflow:
         1) llm: multimodal understanding → text hidden states.
@@ -665,7 +664,7 @@ class MiMoAudioForConditionalGeneration(
         input_ids: torch.Tensor,
         positions: torch.Tensor,
         inputs_embeds: torch.Tensor,
-        intermediate_tensors: Optional[IntermediateTensors] = None,
+        intermediate_tensors: IntermediateTensors | None = None,
         **kwargs: object,
     ):
         # Normalize to batched inputs if caller provides 1D/2D unbatched tensors
@@ -752,7 +751,7 @@ class MiMoAudioForConditionalGeneration(
         self,
         hidden_states: torch.Tensor,
         # sampling_metadata: SamplingMetadata,
-    ) -> Optional[torch.Tensor]:
+    ) -> torch.Tensor | None:
         # logits = self.logits_processor(self.lm_head, hidden_states,
         #                                sampling_metadata)
         # logits = self.llm.lm_head(hidden_states[-1:, :], )

@@ -90,9 +90,9 @@ def dynamic_rope_update(rope_forward):
 
 
 def _compute_default_rope_parameters(
-    config: Optional[PretrainedConfig] = None,
+    config: PretrainedConfig | None = None,
     device: Optional["torch.device"] = None,
-    seq_len: Optional[int] = None,
+    seq_len: int | None = None,
     **rope_kwargs,
 ) -> tuple["torch.Tensor", float]:
     """
@@ -132,9 +132,9 @@ def _compute_default_rope_parameters(
 
 
 def _compute_linear_scaling_rope_parameters(
-    config: Optional[PretrainedConfig] = None,
+    config: PretrainedConfig | None = None,
     device: Optional["torch.device"] = None,
-    seq_len: Optional[int] = None,
+    seq_len: int | None = None,
     **rope_kwargs,
 ) -> tuple["torch.Tensor", float]:
     """
@@ -173,9 +173,9 @@ def _compute_linear_scaling_rope_parameters(
 
 
 def _compute_dynamic_ntk_parameters(
-    config: Optional[PretrainedConfig] = None,
+    config: PretrainedConfig | None = None,
     device: Optional["torch.device"] = None,
-    seq_len: Optional[int] = None,
+    seq_len: int | None = None,
     **rope_kwargs,
 ) -> tuple["torch.Tensor", float]:
     """
@@ -226,7 +226,7 @@ def _compute_dynamic_ntk_parameters(
 def _compute_yarn_parameters(
     config: PretrainedConfig,
     device: "torch.device",
-    seq_len: Optional[int] = None,
+    seq_len: int | None = None,
     **rope_kwargs,
 ) -> tuple["torch.Tensor", float]:
     """
@@ -325,7 +325,7 @@ def _compute_yarn_parameters(
 def _compute_longrope_parameters(
     config: PretrainedConfig,
     device: "torch.device",
-    seq_len: Optional[int] = None,
+    seq_len: int | None = None,
     **rope_kwargs,
 ) -> tuple["torch.Tensor", float]:
     """
@@ -391,7 +391,7 @@ def _compute_longrope_parameters(
 def _compute_llama3_parameters(
     config: PretrainedConfig,
     device: "torch.device",
-    seq_len: Optional[int] = None,
+    seq_len: int | None = None,
     **rope_kwargs,
 ) -> tuple["torch.Tensor", float]:
     """
@@ -451,8 +451,8 @@ def _check_received_keys(
     rope_type: str,
     received_keys: set,
     required_keys: set,
-    optional_keys: Optional[set] = None,
-    ignore_keys: Optional[set] = None,
+    optional_keys: set | None = None,
+    ignore_keys: set | None = None,
 ):
     """Compare the received keys in `config.rope_scaling` against the expected and optional keys"""
     # BC: "rope_type" was originally "type" -- let's check for "rope_type" when "type" is present
@@ -476,7 +476,7 @@ def _check_received_keys(
         logger.warning(f"Unrecognized keys in `rope_scaling` for 'rope_type'='{rope_type}': {unused_keys}")
 
 
-def _validate_default_rope_parameters(config: PretrainedConfig, ignore_keys: Optional[set] = None):
+def _validate_default_rope_parameters(config: PretrainedConfig, ignore_keys: set | None = None):
     rope_scaling = config.rope_scaling
     rope_type = rope_scaling.get("rope_type", rope_scaling.get("type", None))  # BC: "rope_type" was originally "type"
     required_keys = {"rope_type"}
@@ -484,7 +484,7 @@ def _validate_default_rope_parameters(config: PretrainedConfig, ignore_keys: Opt
     _check_received_keys(rope_type, received_keys, required_keys, ignore_keys=ignore_keys)
 
 
-def _validate_linear_scaling_rope_parameters(config: PretrainedConfig, ignore_keys: Optional[set] = None):
+def _validate_linear_scaling_rope_parameters(config: PretrainedConfig, ignore_keys: set | None = None):
     rope_scaling = config.rope_scaling
     rope_type = rope_scaling.get("rope_type", rope_scaling.get("type", None))  # BC: "rope_type" was originally "type"
     required_keys = {"rope_type", "factor"}
@@ -496,7 +496,7 @@ def _validate_linear_scaling_rope_parameters(config: PretrainedConfig, ignore_ke
         logger.warning(f"`rope_scaling`'s factor field must be a float >= 1, got {factor}")
 
 
-def _validate_dynamic_scaling_rope_parameters(config: PretrainedConfig, ignore_keys: Optional[set] = None):
+def _validate_dynamic_scaling_rope_parameters(config: PretrainedConfig, ignore_keys: set | None = None):
     rope_scaling = config.rope_scaling
     rope_type = rope_scaling.get("rope_type", rope_scaling.get("type", None))  # BC: "rope_type" was originally "type"
     required_keys = {"rope_type", "factor"}
@@ -510,7 +510,7 @@ def _validate_dynamic_scaling_rope_parameters(config: PretrainedConfig, ignore_k
         logger.warning(f"`rope_scaling`'s factor field must be a float >= 1, got {factor}")
 
 
-def _validate_yarn_parameters(config: PretrainedConfig, ignore_keys: Optional[set] = None):
+def _validate_yarn_parameters(config: PretrainedConfig, ignore_keys: set | None = None):
     rope_scaling = config.rope_scaling
     rope_type = rope_scaling.get("rope_type", rope_scaling.get("type", None))  # BC: "rope_type" was originally "type"
     required_keys = {"rope_type", "factor"}
@@ -548,7 +548,7 @@ def _validate_yarn_parameters(config: PretrainedConfig, ignore_keys: Optional[se
         )
 
 
-def _validate_longrope_parameters(config: PretrainedConfig, ignore_keys: Optional[set] = None):
+def _validate_longrope_parameters(config: PretrainedConfig, ignore_keys: set | None = None):
     rope_scaling = config.rope_scaling
     rope_type = rope_scaling.get("rope_type", rope_scaling.get("type", None))  # BC: "rope_type" was originally "type"
     required_keys = {"rope_type", "short_factor", "long_factor"}
@@ -598,7 +598,7 @@ def _validate_longrope_parameters(config: PretrainedConfig, ignore_keys: Optiona
                 )
 
 
-def _validate_llama3_parameters(config: PretrainedConfig, ignore_keys: Optional[set] = None):
+def _validate_llama3_parameters(config: PretrainedConfig, ignore_keys: set | None = None):
     rope_scaling = config.rope_scaling
     rope_type = rope_scaling.get("rope_type", rope_scaling.get("type", None))  # BC: "rope_type" was originally "type"
     required_keys = {
@@ -651,7 +651,7 @@ ROPE_VALIDATION_FUNCTIONS = {
 }
 
 
-def rope_config_validation(config: PretrainedConfig, ignore_keys: Optional[set] = None):
+def rope_config_validation(config: PretrainedConfig, ignore_keys: set | None = None):
     """
     Validate the RoPE config arguments, given a `PretrainedConfig` object
     """

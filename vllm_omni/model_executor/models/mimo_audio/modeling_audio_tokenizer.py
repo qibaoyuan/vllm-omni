@@ -13,7 +13,6 @@ except:
     print("flash_attn not installed")
     pass
 from dataclasses import dataclass, field
-from typing import List
 
 from torch.nn import functional as F
 from transformers.activations import ACT2FN
@@ -65,8 +64,8 @@ class StreamingConfig:
 
 @dataclass
 class StreamingCache:
-    hidden_states: List[torch.Tensor] = field(default=None)
-    processed_lengths: List[int] = field(default=None)
+    hidden_states: list[torch.Tensor] = field(default=None)
+    processed_lengths: list[int] = field(default=None)
 
 
 class ISTFT(nn.Module):

@@ -1,11 +1,9 @@
 # Copyright 2025 Xiaomi Corporation.
 """Inference-only Qwen2-Audio model compatible with HuggingFace weights."""
 
-import time
-import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal, Optional, Union, List
+from typing import Annotated, Any, Literal, Union
 
 import torch
 import torch.nn as nn
@@ -21,10 +19,10 @@ from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader, maybe_remap_kv_scale_name
 from vllm.model_executor.models.interfaces import MultiModalEmbeddings, SupportsMultiModal, SupportsPP
 from vllm.model_executor.models.utils import (
-    init_vllm_registered_model,
-    is_pp_missing_parameter,
-    maybe_prefix,
     _merge_multimodal_embeddings as merge_multimodal_embeddings,
+)
+from vllm.model_executor.models.utils import (
+    is_pp_missing_parameter,
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.multimodal.inputs import (
@@ -109,7 +107,7 @@ class Qwen2AudioFeatureInputs(TensorSchema):
 
     type: Literal["audio_features"]
     input_features: Annotated[
-        Union[torch.Tensor, list[torch.Tensor]],
+        torch.Tensor | list[torch.Tensor],
         TensorShape("na", "nmb", 3000),
     ]
 
@@ -169,7 +167,7 @@ class Qwen2AudioProcessingInfo(BaseProcessingInfo):
         assert isinstance(feature_extractor, WhisperFeatureExtractor)
         return feature_extractor
 
-    def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
+    def get_supported_mm_limits(self) -> Mapping[str, int | None]:
         return {"audio": None}
 
 
@@ -207,8 +205,8 @@ def _qwen2audio_field_config(hf_inputs: Mapping[str, torch.Tensor]):
 class Qwen2AudioMultiModalDataParser(MultiModalDataParser):
     def _parse_audio_data(
         self,
-        data: Union[dict[str, torch.Tensor], ModalityData[AudioItem]],
-    ) -> Optional[ModalityDataItems[Any, Any]]:
+        data: dict[str, torch.Tensor] | ModalityData[AudioItem],
+    ) -> ModalityDataItems[Any, Any] | None:
         if isinstance(data, dict):
             return DictEmbeddingItems(
                 data,
@@ -329,7 +327,7 @@ class Qwen2AudioMultiModalProcessor(BaseMultiModalProcessor[Qwen2AudioProcessing
 )
 class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, SupportsPP):
     @classmethod
-    def get_placeholder_str(cls, modality: str, i: int) -> Optional[str]:
+    def get_placeholder_str(cls, modality: str, i: int) -> str | None:
         if modality.startswith("audio"):
             return f"Audio {i}: <|audio_bos|><|AUDIO|><|audio_eos|>"
 
@@ -433,7 +431,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             self.speech_embeddings_to_local = None
 
         self._cached_new_audio_emb_by_req: dict[str, torch.Tensor] = {}
-        self._cached_past_key_values_by_req: dict[str, Optional[DynamicCache]] = {}
+        self._cached_past_key_values_by_req: dict[str, DynamicCache | None] = {}
 
         # Pre-allocate audio_embeds buffer for CUDA graph capture to avoid dynamic allocation
         # Maximum sequence length set to 8192, can be adjusted according to actual needs
@@ -466,7 +464,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             return mm_input
             # return torch.concat(mm_input)
 
-    def _parse_and_validate_audio_input(self, **kwargs: object) -> Optional[Qwen2AudioInputs]:
+    def _parse_and_validate_audio_input(self, **kwargs: object) -> Qwen2AudioInputs | None:
         input_features = kwargs.pop("input_features", None)
         audio_embeds = kwargs.pop("audio_embeds", None)
         feature_attention_mask = kwargs.pop("feature_attention_mask", None)
@@ -504,7 +502,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
     def embed_input_ids(
         self,
         input_ids: torch.Tensor,
-        multimodal_embeddings: Optional[MultiModalEmbeddings] = None,
+        multimodal_embeddings: MultiModalEmbeddings | None = None,
         is_multimodal: torch.Tensor | None = None,
     ) -> torch.Tensor:
         inputs_embeds = self.model.get_input_embeddings()(input_ids)
@@ -581,7 +579,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
     def _prepare_input_parameters(
         self,
         input_ids: torch.Tensor,
-        inputs_embeds: Optional[torch.Tensor],
+        inputs_embeds: torch.Tensor | None,
     ) -> int:
         if input_ids is not None and torch.is_tensor(input_ids):
             if input_ids.ndim == 1:
@@ -595,7 +593,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
     def _should_merge_multimodal_embedding(
         self,
         input_ids: torch.Tensor,
-        inputs_embeds: Optional[torch.Tensor],
+        inputs_embeds: torch.Tensor | None,
         is_capturing: bool,
         kwargs: dict,
     ) -> tuple[bool, dict]:
@@ -627,9 +625,9 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
 
     def _load_cached_state(
         self,
-        request_ids: Optional[list[str]],
-    ) -> tuple[Optional[DynamicCache], dict[str, torch.Tensor]]:
-        past_key_values: Optional[DynamicCache] = None
+        request_ids: list[str] | None,
+    ) -> tuple[DynamicCache | None, dict[str, torch.Tensor]]:
+        past_key_values: DynamicCache | None = None
         prev_new_audio_emb_by_req: dict[str, torch.Tensor] = {}
 
         if hasattr(self, "_cached_new_audio_emb_by_req"):
@@ -647,7 +645,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
     def _prepare_multimodal_embeddings_with_cache(
         self,
         input_ids: torch.Tensor,
-        request_ids: Optional[list[str]],
+        request_ids: list[str] | None,
         prev_new_audio_emb_by_req: dict[str, torch.Tensor],
         kwargs: dict,
     ) -> torch.Tensor:
@@ -681,7 +679,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
     def _generate_speech_tokens_and_audio_embeddings(
         self,
         hidden_states: torch.Tensor,
-    ) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         next_speech_tokens = None
         new_audio_emb = None
 
@@ -725,12 +723,12 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         self,
         input_ids: torch.Tensor,
         positions: torch.Tensor,
-        intermediate_tensors: Optional[IntermediateTensors] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
+        intermediate_tensors: IntermediateTensors | None = None,
+        inputs_embeds: torch.Tensor | None = None,
         **kwargs: object,
-    ) -> Union[torch.Tensor, IntermediateTensors]:
+    ) -> torch.Tensor | IntermediateTensors:
         B = input_ids.shape[0]
-        request_ids: Optional[list[str]] = kwargs.get("request_ids")
+        request_ids: list[str] | None = kwargs.get("request_ids")
         is_capturing = torch.cuda.is_current_stream_capturing()
         new_len = self._prepare_input_parameters(input_ids, inputs_embeds)
 
@@ -798,9 +796,9 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
 
     def _update_request_caches(
         self,
-        request_ids: Optional[list[str]],
-        new_past_key_values: Optional[DynamicCache],
-        new_audio_emb: Optional[torch.Tensor],
+        request_ids: list[str] | None,
+        new_past_key_values: DynamicCache | None,
+        new_audio_emb: torch.Tensor | None,
     ) -> None:
         if new_past_key_values is not None:
             if request_ids and len(request_ids) == 1:
@@ -834,7 +832,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
     def compute_logits(
         self,
         hidden_states: torch.Tensor,
-    ) -> Optional[torch.Tensor]:
+    ) -> torch.Tensor | None:
         if hidden_states.ndim == 2:
             text_logits: torch.Tensor = self.lm_head(hidden_states)
             logits = text_logits.clone()
@@ -923,7 +921,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         self,
         audio_input: Qwen2AudioInputs,  # [B, audio_channels + 1, new_T]
         **kwargs: Any,
-    ) -> Union[torch.Tensor, tuple[torch.Tensor, ...]]:
+    ) -> torch.Tensor | tuple[torch.Tensor, ...]:
         prompt_ids = kwargs.get("prompt_ids", None)
         _is_first_audio_codes = False if prompt_ids is None else True
         # Original TTS correct running logic
@@ -1075,8 +1073,8 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         self,
         speech_input_ids: torch.Tensor,  # [B, C, L]
         prompt_ids_expand: torch.Tensor,  # [L]  (L == speech_input_ids.shape[-1])
-        audio_codes_list: List[torch.Tensor],  # each [B, C, T_i]
-        mm_offset_groups: Optional[torch.Tensor] = None,
+        audio_codes_list: list[torch.Tensor],  # each [B, C, T_i]
+        mm_offset_groups: torch.Tensor | None = None,
         device: torch.device = None,
     ) -> torch.Tensor:
         B, C, L = speech_input_ids.shape
@@ -1119,9 +1117,9 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         self,
         speech_grouped_embeds: torch.Tensor,
         is_speech_1d: torch.Tensor,
-        seg_lengths: List[int],
+        seg_lengths: list[int],
         device: torch.device = None,
-    ) -> List[torch.Tensor]:
+    ) -> list[torch.Tensor]:
         assert speech_grouped_embeds.dim() == 3, f"expect [B,T,H], got {speech_grouped_embeds.shape}"
         B, T_groups, H = speech_grouped_embeds.shape
 
@@ -1134,7 +1132,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         speech_pos = is_speech_1d.nonzero(as_tuple=True)[0]  # [K]
         K = speech_pos.numel()
 
-        segments: List[torch.Tensor] = []
+        segments: list[torch.Tensor] = []
         cursor = 0
         for seg_len in seg_lengths:
             seg_len = int(seg_len)
@@ -1155,7 +1153,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
 
         return segments
 
-    def _get_past_len(self, past_key_values: Optional[DynamicCache]) -> int:
+    def _get_past_len(self, past_key_values: DynamicCache | None) -> int:
         if past_key_values is None:
             return 0
 

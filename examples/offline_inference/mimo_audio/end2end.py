@@ -5,26 +5,24 @@ This example shows how to use vLLM for running offline inference
 with the correct prompt format on Qwen3-Omni (thinker only).
 """
 
-import os
-
-from typing import NamedTuple, List
-
-import numpy as np
-import json
-import io
 import base64
+import io
+import json
+import os
+from typing import NamedTuple
+
 import librosa
+import numpy as np
 import soundfile as sf
 from vllm import SamplingParams
 from vllm.assets.audio import AudioAsset
 from vllm.assets.image import ImageAsset
 from vllm.assets.video import VideoAsset
 from vllm.multimodal.image import convert_image_mode
-from vllm_omni.inputs.data import OmniTokensPrompt
-
 from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 from vllm_omni.entrypoints.omni import Omni
+from vllm_omni.inputs.data import OmniTokensPrompt
 
 SEED = 42
 MAX_CODE2WAV_TOKENS = 18192
@@ -137,12 +135,12 @@ def get_multi_audios_query_from_json(message_path: str, sampling_rate: int = 240
     - Pure audio: <|empty|> (will be replaced by mimo_audio.py)
     - Text + audio (interleaved): <|sostm|>text<|eot|><|eostm|><|empty|>
     """
-    with open(message_path, "r", encoding="utf-8") as f:
+    with open(message_path, encoding="utf-8") as f:
         data = json.load(f)
 
     messages = data.get("messages", [])
-    prompts: List[str] = []
-    audio_list: List[tuple] = []
+    prompts: list[str] = []
+    audio_list: list[tuple] = []
 
     for idx, msg in enumerate(messages):
         role = msg.get("role", "user")
@@ -242,7 +240,7 @@ def get_multi_audios_query_from_json(message_path: str, sampling_rate: int = 240
 
 
 def get_codes_query_from_json(codes_path: str) -> QueryResult:
-    with open(codes_path, "r", encoding="utf-8") as f:
+    with open(codes_path, encoding="utf-8") as f:
         data = json.load(f)
 
     if isinstance(data, list):

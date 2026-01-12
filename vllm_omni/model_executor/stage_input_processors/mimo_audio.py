@@ -1,4 +1,4 @@
-from typing import Any, Union
+from typing import Any
 
 import torch
 from vllm.inputs import TextPrompt
@@ -48,7 +48,7 @@ def prepend_and_flatten_colmajor(x: torch.Tensor, pad_vec: torch.Tensor):
 def llm2code2wav(
     stage_list: list[Any],
     engine_input_source: list[int],
-    prompt: Union[OmniTokensPrompt, TextPrompt, None] = None,
+    prompt: OmniTokensPrompt | TextPrompt | None = None,
     requires_multimodal_data: bool = False,
 ) -> list[OmniTokensPrompt]:
     """
