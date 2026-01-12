@@ -14,7 +14,6 @@ openai_api_key = "EMPTY"
 openai_api_base = "http://localhost:8080/v1"
 import os
 
-
 client = OpenAI(
     # defaults to os.environ.get("OPENAI_API_KEY")
     api_key=openai_api_key,
@@ -199,23 +198,6 @@ def get_system_prompt(message_json_path: Optional[str] = None):
                     "content": processed_content,
                 }
 
-    return {
-        "role": "system",
-        "content": [
-            {
-                "type": "text",
-                "text": (
-                    "You are Qwen, a virtual human developed by the Qwen Team, "
-                    "Alibaba Group, capable of perceiving auditory and visual inputs, "
-                    "as well as generating text and speech."
-                ),
-            }
-        ],
-    }
-
-
-torch.get_num_threads()
-
 
 def get_text_query(custom_prompt: Optional[str] = None):
     question = f"请将这段文字转换为语音: {custom_prompt}"
@@ -228,67 +210,6 @@ def get_text_query(custom_prompt: Optional[str] = None):
             }
         ],
     }
-    return prompt
-
-
-def get_mixed_modalities_query(
-    video_path: Optional[str] = None,
-    image_path: Optional[str] = None,
-    audio_path: Optional[str] = None,
-    custom_prompt: Optional[str] = None,
-):
-    question = (
-        custom_prompt or "What is recited in the audio? What is the content of this image? Why is this video funny?"
-    )
-    video_url = get_video_url_from_path(video_path)
-    image_url = get_image_url_from_path(image_path)
-    audio_url = get_audio_url_from_path(audio_path)
-    prompt = {
-        "role": "user",
-        "content": [
-            {
-                "type": "audio_url",
-                "audio_url": {"url": audio_url},
-            },
-            {
-                "type": "image_url",
-                "image_url": {"url": image_url},
-            },
-            {
-                "type": "video_url",
-                "video_url": {"url": video_url},
-            },
-            {
-                "type": "text",
-                "text": f"{question}",
-            },
-        ],
-    }
-
-    return prompt
-
-
-def get_use_audio_in_video_query(video_path: Optional[str] = None, custom_prompt: Optional[str] = None):
-    question = custom_prompt or "Describe the content of the video, then convert what the baby say into text."
-    video_url = get_video_url_from_path(video_path)
-
-    prompt = {
-        "role": "user",
-        "content": [
-            {
-                "type": "video_url",
-                "video_url": {
-                    "url": video_url,
-                    "num_frames": 16,
-                },
-            },
-            {
-                "type": "text",
-                "text": f"{question}",
-            },
-        ],
-    }
-
     return prompt
 
 
@@ -350,8 +271,6 @@ def get_multi_audios_query(
 
 
 query_map = {
-    "mixed_modalities": get_mixed_modalities_query,
-    "use_audio_in_video": get_use_audio_in_video_query,
     "multi_audios": get_multi_audios_query,
     "text": get_text_query,
 }
@@ -384,8 +303,6 @@ def run_multimodal_generation(args) -> None:
     ]
 
     # Get paths and custom prompt from args
-    video_path = getattr(args, "video_path", None)
-    image_path = getattr(args, "image_path", None)
     audio_path = getattr(args, "audio_path", None)
     custom_prompt = getattr(args, "prompt", None)
     message_json_path = getattr(args, "message_json", None)
@@ -393,13 +310,7 @@ def run_multimodal_generation(args) -> None:
 
     # Get the query function and call it with appropriate parameters
     query_func = query_map[args.query_type]
-    if args.query_type == "mixed_modalities":
-        prompt = query_func(
-            video_path=video_path, image_path=image_path, audio_path=audio_path, custom_prompt=custom_prompt
-        )
-    elif args.query_type == "use_audio_in_video":
-        prompt = query_func(video_path=video_path, custom_prompt=custom_prompt)
-    elif args.query_type == "multi_audios":
+    if args.query_type == "multi_audios":
         prompt = query_func(audio_path=audio_path, custom_prompt=custom_prompt, message_json_path=message_json_path)
     elif args.query_type == "text":
         prompt = query_func(custom_prompt=custom_prompt)
@@ -411,19 +322,11 @@ def run_multimodal_generation(args) -> None:
         # Optional, it has a default setting in stage_configs of the corresponding model.
     }
 
-    if args.query_type == "use_audio_in_video":
-        extra_body["mm_processor_kwargs"] = {"use_audio_in_video": True}
-
     # Build messages list
     if args.query_type == "multi_audios" and isinstance(prompt, list):
         messages = [get_system_prompt(message_json_path=message_json_path)] + prompt
     elif args.query_type == "text":
         messages = [prompt]
-    else:
-        messages = [
-            get_system_prompt(),
-            prompt,
-        ]
 
     chat_completion = client.chat.completions.create(
         messages=messages,
@@ -451,31 +354,11 @@ def parse_args():
         "--query-type",
         "-q",
         type=str,
-        default="multi_audios",
+        default="text",
         choices=query_map.keys(),
         help="Query type.",
     )
-    parser.add_argument(
-        "--video-path",
-        "-v",
-        type=str,
-        default=None,
-        help="Path to local video file or URL. If not provided and query-type uses video, uses default video URL.",
-    )
-    parser.add_argument(
-        "--image-path",
-        "-i",
-        type=str,
-        default=None,
-        help="Path to local image file or URL. If not provided and query-type uses image, uses default image URL.",
-    )
-    parser.add_argument(
-        "--audio-path",
-        "-a",
-        type=str,
-        default=None,
-        help="Path to local audio file or URL. If not provided and query-type uses audio, uses default audio URL.",
-    )
+
     parser.add_argument(
         "--prompt",
         "-p",
