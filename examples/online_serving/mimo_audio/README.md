@@ -8,20 +8,19 @@ Please refer to [README.md](../../../README.md)
 
 ### Launch the Server
 ```bash
-export MODEL_PATH= "/mnt/user/qibaoyuan/MiMo-Audio-7B-Instruct"
-export STAGE_CONFIGS_PATH="/mnt/user/qibaoyuan/vllm-omni-dev/vllm_omni/model_executor/stage_configs/mimo_audio/mimo_audio_llm_code2wav.yaml"
+export MODEL_PATH= "./MiMo-Audio-7B-Instruct"
+export STAGE_CONFIGS_PATH="./model_executor/stage_configs/mimo_audio/mimo_audio.yaml"
 export CUDA_LAUNCH_BLOCKING=1
-export MIMO_AUDIO_TOKENIZER_PATH="/mnt/user/qibaoyuan/MiMo-Audio-Tokenizer"
-export MIMO_AUDIO_TOKENIZER_CONFIG_PATH="/mnt/user/qibaoyuan/MiMo-Audio-Tokenizer"
+export MIMO_AUDIO_TOKENIZER_PATH="./MiMo-Audio-Tokenizer"
+export MIMO_AUDIO_TOKENIZER_CONFIG_PATH="./MiMo-Audio-Tokenizer"
 export MIMO_AUDIO_ECHO_CODES="false"
 ```
 
 
 ```bash
-export PYTHONPATH=/mnt/user/qibaoyuan/vllm-omni-dev:${PYTHONPATH}
 vllm-omni serve  ${MODEL_PATH} --omni \
 --served-model-name "MiMo-Audio-7B-Instruct"  \
---port 18091 --stage-configs-path ${STAGE_CONFIGS_PATH}
+--port 8091 --stage-configs-path ${STAGE_CONFIGS_PATH}
 ```
 
 If you have custom stage configs file, launch the server with command below
@@ -76,38 +75,4 @@ python openai_chat_completion_client_for_multimodal_generation.py \
     --prompt "Analyze all the media content and provide a comprehensive summary."
 ```
 
-####  Send request via curl
-
-```bash
-bash run_curl_multimodal_generation.sh mixed_modalities
-```
-
-## Run Local Web UI Demo
-
-This Web UI demo allows users to interact with the model through a web browser.
-
-### Running Gradio Demo
-
-Once vllm and vllm-omni are installed, you can launch the web service built on AsyncOmni by
-
-```bash
-python gradio_demo.py  --model Qwen/MiMo-Audio-7B --port 7861
-```
-
-Then open `http://localhost:7861/` on your local browser to interact with the web UI.
-
-The gradio script supports the following arguments:
-
-- `--model`: Model name
-- `--ip`: Host/IP for Gradio server (default: 127.0.0.1)
-- `--port`: Port for Gradio server (default: 7861)
-- `--stage-configs-path`: Path to custom stage configs YAML file (optional)
-- `--share`: Share the Gradio demo publicly (creates a public link)
-
-### FAQ
-
-If you encounter error about backend of librosa, try to install ffmpeg with command below.
-```
-sudo apt update
-sudo apt install ffmpeg
-```
+ 
