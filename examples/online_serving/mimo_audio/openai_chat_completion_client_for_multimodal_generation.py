@@ -354,11 +354,10 @@ def parse_args():
         "--query-type",
         "-q",
         type=str,
-        default="text",
+        default="multi_audios",
         choices=query_map.keys(),
         help="Query type.",
     )
-
     parser.add_argument(
         "--prompt",
         "-p",
