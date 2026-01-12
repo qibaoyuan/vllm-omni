@@ -427,7 +427,7 @@ def parse_args():
         "--query-type",
         "-q",
         type=str,
-        default="text_audio",
+        default="multi_audios",
         choices=query_map.keys(),
         help="Query type.",
     )
