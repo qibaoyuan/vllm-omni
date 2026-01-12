@@ -14,7 +14,7 @@ stage_args:
       gpu_memory_utilization: 0.8
       enforce_eager: true    # need to discuss
       trust_remote_code: true
-      engine_output_type: latent  # change the param name,such as pooling_output
+      engine_output_type: latent   # change the param name,such as pooling_output
       max_model_len: 3200
       enable_prefix_caching: false
       max_num_batched_tokens: 3200
