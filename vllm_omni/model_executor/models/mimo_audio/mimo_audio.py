@@ -101,7 +101,6 @@ class MiMoAudioLLMProcessingInfo(
     ) -> Mapping[str, int]:
         # MiMoAudio has different tokenization than Qwen2Audio
         # This is a placeholder - adjust based on actual MiMoAudio tokenizer limits
-        hf_config = self.get_hf_config()
         # For now, return a large value or None
         # This should be adjusted based on MiMoAudio's actual constraints
         return {"audio": 1}

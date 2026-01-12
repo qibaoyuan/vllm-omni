@@ -10,7 +10,7 @@ TALKER_CODEC_START_TOKEN_ID = 8293
 TALKER_CODEC_END_TOKEN_ID = 8294
 
 
-def prepend_and_flatten_colmajor(x: torch.Tensor, pad_vec: torch.Tensor):
+def prepend_and_flatten_colmajor(x: torch.Tensor, pad_vec: torch.Tensor) -> torch.Tensor:
     """
     Prepend a padding vector to the input tensor and flatten in column-major order.
 
@@ -90,9 +90,6 @@ def llm2code2wav(
         codec_codes = output.multimodal_output["code"].to(torch.long)
 
         pad_vec = torch.tensor([151667, 151667, 151667, 151667])
-
-        # x shape: (2, 1, 8, 4)
-        pad = pad_vec.view(1, 1, 1, 4).expand(codec_codes.size(0), 1, 1, 4)  # (2, 1, 1, 4)
 
         code_final = prepend_and_flatten_colmajor(codec_codes, pad_vec)
         code_final = code_final.tolist()

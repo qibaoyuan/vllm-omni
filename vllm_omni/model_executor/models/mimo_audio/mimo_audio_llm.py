@@ -133,7 +133,7 @@ class Qwen2AudioEmbeddingInputs(TensorSchema):
     audio_embeds: list[torch.Tensor]
 
 
-Qwen2AudioInputs = Union[Qwen2AudioFeatureInputs, Qwen2AudioEmbeddingInputs]
+Qwen2AudioInputs = Qwen2AudioFeatureInputs | Qwen2AudioEmbeddingInputs
 
 
 # === Audio Encoder === #
