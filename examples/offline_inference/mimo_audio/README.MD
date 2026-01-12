@@ -36,5 +36,6 @@ export config_file="${CODE_DIR}/vllm_omni/model_executor/stage_configs/mimo_audi
 
 python3 -u end2end.py \
 --stage-configs-path ${config_file} \
---model ${MODEL_PATH} 
+--model ${MODEL_PATH}  \
+--query-type multi_audios --message-path  ./message_base64_wav.json
 ```
