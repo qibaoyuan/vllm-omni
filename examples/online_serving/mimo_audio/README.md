@@ -38,7 +38,7 @@ cd examples/online_serving/mimo_audio
 ####  Send request via python
 
 ```bash
-# Multi-round audio dialogue task (Default 4 rounds)
+# Audio dialogue task 
 python openai_chat_completion_client_for_multimodal_generation.py \
 --query-type multi_audios 
 ```
