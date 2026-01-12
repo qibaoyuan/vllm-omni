@@ -23,11 +23,6 @@ vllm-omni serve  ${MODEL_PATH} --omni \
 --port 8091 --stage-configs-path ${STAGE_CONFIGS_PATH}
 ```
 
-If you have custom stage configs file, launch the server with command below
-```bash
-vllm serve Qwen/MiMo-Audio-7B --omni --port 8091 --stage-configs-path ${STAGE_CONFIGS_PATH}
-```
-
 ### Send Multi-modal Request
 
 Get into the example folder
