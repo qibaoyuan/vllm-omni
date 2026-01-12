@@ -487,9 +487,7 @@ def parse_args():
         "--message-json",
         "-m",
         type=str,
-        # default="/Users/qibaoyuan/PycharmProjects/vllm-omni-dev/examples/offline_inference/mimo_audio/message_base64_wav_new_voice.json",
-        default="/Users/qibaoyuan/PycharmProjects/vllm-omni-dev/examples/offline_inference/mimo_audio/message_base64_wav_new_voice_tts.json",
-        # default="/Users/qibaoyuan/PycharmProjects/vllm-omni-dev/examples/offline_inference/mimo_audio/50round_message_base64.json",
+        default="./examples/offline_inference/mimo_audio/message_base64_wav.json",
         help="Path to message.json file containing conversation history. When provided, "
         "system prompt and multi_audios query will be loaded from this file.",
     )
