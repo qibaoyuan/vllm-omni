@@ -420,7 +420,7 @@ def parse_args():
         "--message-path",
         "-mp",
         type=str,
-        default="",
+        default="./message_base64_wav.json",
         help="The path for query messages from users in frontend.",
     )
     parser.add_argument(
