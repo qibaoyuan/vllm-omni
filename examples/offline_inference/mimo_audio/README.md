@@ -32,7 +32,7 @@ export MIMO_AUDIO_TOKENIZER_PATH="${MODEL_DIR}/MiMo-Audio-Tokenizer"
 export MIMO_AUDIO_TOKENIZER_CONFIG_PATH=${MIMO_AUDIO_TOKENIZER_PATH}
 export MODEL_PATH="${MODEL_DIR}/MiMo-Audio-7B-Instruct"
 
-export config_file="${CODE_DIR}/vllm_omni/model_executor/stage_configs/mimo_audio/mimo_audio.yaml"
+export config_file="${CODE_DIR}/vllm_omni/model_executor/stage_configs/mimo_audio.yaml"
 
 python3 -u end2end.py \
 --stage-configs-path ${config_file} \
