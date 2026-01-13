@@ -87,7 +87,10 @@ def llm2code2wav(
 
         # Extract codec codes from talker output
         # Expected shape: [8, seq_len] (8-layer RVQ codes)
-        codec_codes = output.multimodal_output["code"].to(torch.long)
+        if "code" in output.multimodal_output:
+            codec_codes = output.multimodal_output["code"].to(torch.long)
+        else:
+            raise ValueError(f"Invalid multimodal_output: {output.multimodal_output}")
 
         pad_vec = torch.tensor([151667, 151667, 151667, 151667])
 
