@@ -1,6 +1,5 @@
 # Copyright 2025 Xiaomi Corporation.
 import os
-import time
 from collections.abc import Iterable, Mapping, Sequence
 from functools import cached_property
 from typing import Any
