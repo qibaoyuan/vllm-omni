@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """
 This example shows how to use vLLM for running offline inference
-with the correct prompt format on Qwen3-Omni (thinker only).
+with the correct prompt format on MiMo-Audio-Omni.
 """
 
 import base64
@@ -485,13 +485,13 @@ def parse_args():
     parser.add_argument(
         "--stage-configs-path",
         type=str,
-        default="vllm_omni/model_executor/stage_configs/mimo_audio/mimo_audio_llm_code2wav.yaml",
+        default="../../../model_executor/stage_configs/mimo_audio.yaml",
         help="Path to a stage configs file.",
     )
     parser.add_argument(
         "--codes-path",
         type=str,
-        default="./code_final.json",
+        default=None,
         help="Path to a codes json file.",
     )
 

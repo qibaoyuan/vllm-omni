@@ -391,12 +391,15 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             return_bias=False,
         )
 
+        # Re-encode the sum of multi-layer RVQ embeddings to obtain true Audio Code Embeddings
         self.input_local_config = config.input_local_config()
         self.input_local_transformer = MiMoAudioQwen2Model(self.input_local_config)
         self.input_local_transformer.embed_tokens = None
 
         ###other parts
 
+        # Used for multi-iteration computation: re-encode Audio Code Embeddings and convert back to
+        # multi-layer RVQ codes in patch units
         self.local_transformer = MiMoAudioQwen2Model(self.local_config)
         self.local_transformer.embed_tokens = None
         self.local_transformer_lm_heads = nn.ModuleList(

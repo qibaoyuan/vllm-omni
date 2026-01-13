@@ -10,7 +10,7 @@ from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 # Modify OpenAI's API key and API base to use vLLM's API server.
 openai_api_key = "EMPTY"
-openai_api_base = "http://localhost:8080/v1"
+openai_api_base = "http://localhost:8091/v1"
 
 client = OpenAI(
     # defaults to os.environ.get("OPENAI_API_KEY")
@@ -367,7 +367,7 @@ def parse_args():
         "--message-json",
         "-m",
         type=str,
-        default="./examples/offline_inference/mimo_audio/message_base64_wav.json",
+        default="../../offline_inference/mimo_audio/message_base64_wav.json",
         help="Path to message.json file containing conversation history. When provided, "
         "system prompt and multi_audios query will be loaded from this file.",
     )

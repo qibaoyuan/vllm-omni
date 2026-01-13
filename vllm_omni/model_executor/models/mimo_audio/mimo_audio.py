@@ -442,23 +442,22 @@ class MiMoAudioForConditionalGeneration(
             self.model_stage = os.environ["model_stage"]
         else:
             self.model_stage = vllm_config.model_config.model_stage
-        t0 = time.perf_counter()
-        if self.model_stage == "llm":
-            # Initialize llm model (multimodal processing)
-            self.llm = init_vllm_registered_model(
+
+        if self.model_stage == "fused_thinker_talker":
+            # Initialize fused_thinker_talker llm model (multimodal processing)
+            self.fused_thinker_talker = init_vllm_registered_model(
                 vllm_config=vllm_config,
                 # prefix=maybe_prefix(prefix, "model"),
                 hf_config=vllm_config.model_config.hf_config,
                 # Use registry architecture key
                 architectures=["MiMoAudioLLMForConditionalGeneration"],
             )
-            print("init llm, finished", self.llm, "time cost", time.perf_counter() - t0)
-            self.set_custom_preprocess(self.llm_postprocess)
+            self.set_custom_preprocess(self.llm_preprocess)
             self.token2wav = None
-            self.model = self.llm
+            self.model = self.fused_thinker_talker
 
         elif self.model_stage == "code2wav":
-            self.llm = None
+            self.fused_thinker_talker = None
             # Initialize token2wav (code->mel->wav) like thinker/talker
             self.token2wav = init_vllm_registered_model(
                 vllm_config=vllm_config,
@@ -473,10 +472,12 @@ class MiMoAudioForConditionalGeneration(
 
         # Set up intermediate tensors
         self.make_empty_intermediate_tensors = (
-            (self.llm.make_empty_intermediate_tensors) if self.model_stage == "llm" else lambda: None
+            (self.fused_thinker_talker.make_empty_intermediate_tensors)
+            if self.model_stage == "fused_thinker_talker"
+            else lambda: None
         )
 
-    def llm_postprocess(self, input_ids: torch.Tensor, input_embeds: torch.Tensor, **info_dict: dict):
+    def llm_preprocess(self, input_ids: torch.Tensor, input_embeds: torch.Tensor, **info_dict: dict):
         pass
 
     @staticmethod
@@ -504,8 +505,8 @@ class MiMoAudioForConditionalGeneration(
                 token2wav_device='cpu',
             )
         """
-        if llm_device is not None and self.llm is not None:
-            self.llm.to(llm_device)
+        if llm_device is not None and self.fused_thinker_talker is not None:
+            self.fused_thinker_talker.to(llm_device)
         if token2wav_device is not None and self.token2wav is not None:
             self.token2wav.to(token2wav_device)
 
@@ -547,7 +548,7 @@ class MiMoAudioForConditionalGeneration(
                 or k.startswith("speech_embeddings")
                 or k.startswith("speech_group_downcast")
             ):
-                if self.llm:
+                if self.fused_thinker_talker:
                     llm_weights.append((k, v))
             elif k.startswith("mel_transform."):
                 if self.token2wav:
@@ -555,10 +556,10 @@ class MiMoAudioForConditionalGeneration(
             else:
                 pass
 
-        # Load llm weights
-        if self.llm:
+        # Load fused_thinker_talker llm weights
+        if self.fused_thinker_talker:
             if llm_weights:
-                llm_loaded = self.llm.load_weights(llm_weights)
+                llm_loaded = self.fused_thinker_talker.load_weights(llm_weights)
             else:
                 llm_loaded = set([k for k, v in llm_weights])
             # thinker_loaded = add_prefix_to_loaded_weights(thinker_loaded, "thinker")
@@ -628,7 +629,7 @@ class MiMoAudioForConditionalGeneration(
         3) If audio requested (or codec provided), use token2wav to synthesize waveform.
         4) Return text hidden states (and audio when applicable).
         """
-        if self.model_stage == "llm":
+        if self.model_stage == "fused_thinker_talker":
             next_speech_tokens, text_hidden_states, added_batch_dim = self.generate_codes(
                 input_ids=input_ids,
                 positions=positions,
@@ -636,8 +637,6 @@ class MiMoAudioForConditionalGeneration(
                 intermediate_tensors=intermediate_tensors,
                 **kwargs,
             )
-
-            # print("text_hidden_states output, from llm", text_hidden_states)
 
             return OmniOutput(
                 text_hidden_states=(text_hidden_states.squeeze(0) if added_batch_dim else text_hidden_states),
@@ -677,7 +676,7 @@ class MiMoAudioForConditionalGeneration(
         if inputs_embeds is not None and inputs_embeds.ndim == 2:
             inputs_embeds = inputs_embeds.unsqueeze(0)
             added_batch_dim = True
-        llm_dev = self._module_device(self.llm)
+        llm_dev = self._module_device(self.fused_thinker_talker)
 
         # if input_ids is None, set it to a zero tensor, in the length of the
         # same as the embedding seq length
@@ -694,14 +693,13 @@ class MiMoAudioForConditionalGeneration(
             inputs_embeds = inputs_embeds.to(llm_dev)
 
         # Run llm
-        llm_output = self.llm(
+        llm_output = self.fused_thinker_talker(
             input_ids=input_ids,
             positions=positions,
             intermediate_tensors=intermediate_tensors,
             inputs_embeds=inputs_embeds,
             **kwargs,
         )
-        # print("stage llm_output", llm_output)
 
         next_speech_tokens = None
         if isinstance(llm_output, tuple):
@@ -749,13 +747,10 @@ class MiMoAudioForConditionalGeneration(
     def compute_logits(
         self,
         hidden_states: torch.Tensor,
-        # sampling_metadata: SamplingMetadata,
+        sampling_metadata: SamplingMetadata | None = None,
     ) -> torch.Tensor | None:
         # logits = self.logits_processor(self.lm_head, hidden_states,
         #                                sampling_metadata)
-        # logits = self.llm.lm_head(hidden_states[-1:, :], )
-        # shift_hidden_states: torch.Tensor = self.hidden_states_downcast(
-        #     hidden_states[-1:, :])  # [ 1, hidden_size]
         # Handle OmniOutput type
         if isinstance(hidden_states, OmniOutput):
             hidden_states = hidden_states.text_hidden_states
