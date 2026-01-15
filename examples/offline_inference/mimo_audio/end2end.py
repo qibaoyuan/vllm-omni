@@ -69,15 +69,24 @@ def get_tts_sft(
     text="你好！请简单介绍一下你自己。",
     instruct=None,
     read_text_only=True,
+    prompt_speech=None,
+    audio_list=None,
 ):
     res = get_tts_sft_prompt(
         text,
         instruct=instruct,
         read_text_only=read_text_only,
-        prompt_speech=None,
+        prompt_speech=prompt_speech,
     )
+
     prompt = to_prompt(res)
-    return prompt
+    final_prompt = {
+        "prompt": prompt,
+        "multi_modal_data": {
+            "audio": audio_list,
+        },
+    }
+    return final_prompt
 
 
 def get_audio_understanding_sft(audio_path, text="", thinking=False):
@@ -139,6 +148,7 @@ def get_text_dialogue_sft_multiturn(
 query_map = {
     "tts_sft": get_tts_sft,
     "tts_sft_with_instruct": get_tts_sft,
+    "tts_sft_with_audio": get_tts_sft,
     "tts_sft_with_natural_instruction": get_tts_sft,
     "audio_understanding_sft": get_audio_understanding_sft,
     "audio_understanding_sft_with_thinking": get_audio_understanding_sft,
@@ -213,6 +223,10 @@ def main(args):
         Request ID: 0_f6885005-c769-47ef-93fb-f22093fb42a6, Saved audio to ./output_audio/tts_sft_with_instruct/0_f6885005-c769-47ef-93fb-f22093fb42a6.wav
         """
         query_result = query_func(text=text, instruct=instruct, read_text_only=True)
+    elif args.query_type == "tts_sft_with_audio":
+        # python3 -u end2end.py --stage-configs-path ${config_file} --model ${MODEL_PATH}  --query-type tts_sft_with_audio --audio_path /mnt/user/qibaoyuan/vllm-omni-dev/examples/offline_inference/mimo_audio/qa_car_24k.wav
+        audio_list = [get_audio_data(audio_path)]
+        query_result = query_func(text=text, read_text_only=True, prompt_speech=audio_path, audio_list=audio_list)
     elif args.query_type == "tts_sft_with_natural_instruction":
         # python3 -u end2end.py --stage-configs-path ${config_file} --model ${MODEL_PATH}  --query-type tts_sft_with_natural_instruction --text "用气喘吁吁的年轻男性声音说：我跑不动了，你等等我！"
         """

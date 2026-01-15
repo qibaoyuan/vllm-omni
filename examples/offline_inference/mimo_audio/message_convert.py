@@ -465,10 +465,16 @@ def get_tts_sft_prompt(
 
         if instruct is None:
             # No instruct instruction
-            lm_prompt = [
-                create_segment(text=f"<|im_start|>user\n{template}: {text}<|im_end|>\n"),
-                create_assistant_start_with_sostm(),
-            ]
+            lm_prompt = _build_tts_system_prompt(
+                has_voice_prompt=assistant_prompt_audio_token is not None,
+                voice_audio_token=assistant_prompt_audio_token,
+            )
+            lm_prompt.extend(
+                [
+                    create_segment(text=f"<|im_start|>user\n{template}: {text}<|im_end|>\n"),
+                    create_assistant_start_with_sostm(),
+                ]
+            )
         else:
             # Has instruct instruction
             lm_prompt = _build_tts_system_prompt(
@@ -720,6 +726,22 @@ def to_prompt(input_segs):
 
 
 if __name__ == "__main__":
+    # input_speech = "./spoken_dialogue_assistant_turn_1.wav"
+    # audio_list = get_audio_data(input_speech)
+    # res = get_tts_sft_prompt(
+    #     "我跑不动了，你等等我！",
+    #     read_text_only=True,
+    #     prompt_speech=input_speech,
+    # )
+    # prompt = to_prompt(res)
+    #
+    # final_prompt = {
+    #     "prompt": prompt,
+    #     "multi_modal_data": {
+    #         "audio": audio_list,
+    #     },
+    # }
+
     # res = get_tts_sft_prompt(
     #     "用气喘吁吁的年轻男性声音说：我跑不动了，你等等我！",
     #      # instruct='用小孩子的声音开心的说',
