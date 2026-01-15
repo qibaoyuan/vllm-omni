@@ -313,7 +313,6 @@ def main(args):
         output_dir = os.path.join(output_dir, args.query_type)
     os.makedirs(output_dir, exist_ok=True)
 
-    # prompts ['<|im_start|>user\n今天天气真好<|im_end|>\n<|im_start|>assistant\n<|sostm|>']
     for stage_outputs in omni_outputs:
         if stage_outputs.final_output_type == "text":
             for output in stage_outputs.request_output:

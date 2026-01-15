@@ -81,12 +81,12 @@ def detect_language(text):
 
 
 # ============================================
-# 公共辅助函数 - InputSegment 创建
+# Common Helper Functions - InputSegment Creation
 # ============================================
 
 
 def create_segment(text: str = "", audio=None) -> InputSegment:
-    """创建一个标准的 InputSegment，使用默认的 zeroemb 参数"""
+    """Create a standard InputSegment with default zeroemb parameters"""
     return InputSegment(
         text=text,
         audio=audio,
@@ -98,7 +98,7 @@ def create_segment(text: str = "", audio=None) -> InputSegment:
 def create_streaming_segment(
     text: str, audio, tokenizer, group_size: int, audio_channels: int
 ) -> StreamingInputSegment:
-    """创建一个 StreamingInputSegment"""
+    """Create a StreamingInputSegment"""
     return StreamingInputSegment(
         text=text,
         audio=audio,
@@ -111,32 +111,32 @@ def create_streaming_segment(
 
 
 # ============================================
-# 公共辅助函数 - 常用标记 Segment 创建
+# Common Helper Functions - Common Token Segment Creation
 # ============================================
 
 
 def create_user_start() -> InputSegment:
-    """创建 user 角色开始标记"""
+    """Create user role start token"""
     return create_segment(text="<|im_start|>user\n")
 
 
 def create_user_end() -> InputSegment:
-    """创建角色结束标记"""
+    """Create role end token"""
     return create_segment(text="<|im_end|>\n")
 
 
 def create_assistant_start() -> InputSegment:
-    """创建 assistant 角色开始标记"""
+    """Create assistant role start token"""
     return create_segment(text="<|im_start|>assistant\n")
 
 
 def create_system_start() -> InputSegment:
-    """创建 system 角色开始标记"""
+    """Create system role start token"""
     return create_segment(text="<|im_start|>system\n")
 
 
 def create_thinking_segment(thinking: bool = False) -> InputSegment:
-    """创建 thinking 标记，根据 thinking 参数决定是否闭合"""
+    """Create thinking token, closed or open based on thinking parameter"""
     if thinking:
         return create_segment(text="<think>\n")
     else:
@@ -144,27 +144,27 @@ def create_thinking_segment(thinking: bool = False) -> InputSegment:
 
 
 def create_sostm_segment() -> InputSegment:
-    """创建流式输出开始标记"""
+    """Create streaming output start token"""
     return create_segment(text="<|sostm|>")
 
 
 def create_assistant_start_with_sostm() -> InputSegment:
-    """创建带 sostm 的 assistant 开始标记"""
+    """Create assistant start token with sostm"""
     return create_segment(text="<|im_start|>assistant\n<|sostm|>")
 
 
 def create_assistant_start_with_think() -> InputSegment:
-    """创建带 think 开始的 assistant 标记"""
+    """Create assistant start token with think opening"""
     return create_segment(text="<|im_start|>assistant\n<think>\n")
 
 
 # ============================================
-# 公共辅助函数 - 复合 Segment 创建
+# Common Helper Functions - Composite Segment Creation
 # ============================================
 
 
 def create_user_turn_with_audio(audio_tokenized, extra_text: str = None) -> list[InputSegment]:
-    """创建包含音频的 user turn"""
+    """Create a user turn containing audio"""
     segments = [
         create_user_start(),
         create_segment(audio=audio_tokenized),
@@ -176,7 +176,7 @@ def create_user_turn_with_audio(audio_tokenized, extra_text: str = None) -> list
 
 
 def create_user_turn_with_text(text: str) -> list[InputSegment]:
-    """创建纯文本的 user turn"""
+    """Create a text-only user turn"""
     return [
         create_user_start(),
         create_segment(text=text),
@@ -185,7 +185,7 @@ def create_user_turn_with_text(text: str) -> list[InputSegment]:
 
 
 def create_system_turn_with_voice_prompt(prompt_text: str, audio_token) -> list[InputSegment]:
-    """创建带音色提示的 system turn"""
+    """Create a system turn with voice prompt"""
     return [
         create_system_start(),
         create_segment(text=prompt_text),
@@ -195,7 +195,7 @@ def create_system_turn_with_voice_prompt(prompt_text: str, audio_token) -> list[
 
 
 def create_system_turn_text_only(system_text: str) -> list[InputSegment]:
-    """创建纯文本的 system turn"""
+    """Create a text-only system turn"""
     return [
         create_system_start(),
         create_segment(text=system_text),
@@ -204,7 +204,7 @@ def create_system_turn_text_only(system_text: str) -> list[InputSegment]:
 
 
 # ============================================
-# 公共辅助函数 - 多轮对话处理
+# Common Helper Functions - Multi-turn Dialogue Processing
 # ============================================
 
 
@@ -214,15 +214,15 @@ def process_multiturn_messages(
     assistant_processor: Callable[[dict], list[InputSegment]],
 ) -> list[InputSegment]:
     """
-    通用的多轮对话消息处理函数
+    Generic multi-turn dialogue message processing function
 
     Args:
-        message_list: 消息列表，每个消息包含 'role' 和 'content'
-        user_processor: 处理 user 消息的函数
-        assistant_processor: 处理 assistant 消息的函数
+        message_list: List of messages, each containing 'role' and 'content'
+        user_processor: Function to process user messages
+        assistant_processor: Function to process assistant messages
 
     Returns:
-        处理后的 InputSegment 列表
+        Processed list of InputSegments
     """
     lm_prompt = []
     for message in message_list:
@@ -237,7 +237,7 @@ def process_multiturn_messages(
 
 
 def create_text_user_message(message: dict) -> list[InputSegment]:
-    """处理纯文本的 user 消息"""
+    """Process a text-only user message"""
     return [
         create_user_start(),
         create_segment(text=message["content"]),
@@ -246,7 +246,7 @@ def create_text_user_message(message: dict) -> list[InputSegment]:
 
 
 def create_text_assistant_message(message: dict) -> list[InputSegment]:
-    """处理纯文本的 assistant 消息"""
+    """Process a text-only assistant message"""
     return [
         create_assistant_start(),
         create_segment(text=message["content"]),
@@ -255,7 +255,7 @@ def create_text_assistant_message(message: dict) -> list[InputSegment]:
 
 
 def create_audio_user_message(message: dict) -> list[InputSegment]:
-    """处理音频的 user 消息"""
+    """Process an audio user message"""
     return [
         create_user_start(),
         create_segment(audio=preprocess_input(message["content"])),
@@ -267,12 +267,12 @@ def append_assistant_ending(
     lm_prompt: list[InputSegment], thinking: bool = False, use_sostm: bool = False
 ) -> list[InputSegment]:
     """
-    为 prompt 添加 assistant 结尾
+    Append assistant ending to the prompt
 
     Args:
-        lm_prompt: 现有的 prompt 列表
-        thinking: 是否使用开放的 thinking 标记
-        use_sostm: 是否使用 sostm 标记（用于语音输出）
+        lm_prompt: Existing prompt list
+        thinking: Whether to use open thinking token
+        use_sostm: Whether to use sostm token (for speech output)
     """
     if use_sostm:
         lm_prompt.append(create_assistant_start_with_sostm())
@@ -285,7 +285,7 @@ def append_assistant_ending(
 def get_asr_sft_prompt(
     input: None | str = None,
 ):
-    """ASR (语音识别) 任务的 prompt 构建"""
+    """Build prompt for ASR (Automatic Speech Recognition) task"""
     audio_tokenized = preprocess_input(input)
     template = random.choice(asr_zh_templates + asr_en_templates)
 
@@ -418,7 +418,7 @@ def preprocess_input(input: None | str | torch.Tensor = None, device="cpu", audi
 
 
 def _build_tts_system_prompt(has_voice_prompt: bool, voice_audio_token=None) -> list[InputSegment]:
-    """构建 TTS 任务的 system prompt"""
+    """Build system prompt for TTS task"""
     if has_voice_prompt and voice_audio_token is not None:
         return [
             create_system_start(),
@@ -439,18 +439,18 @@ def get_tts_sft_prompt(
     prompt_speech=None,
 ):
     """
-    TTS (文本转语音) 任务的 prompt 构建
+    Build prompt for TTS (Text-to-Speech) task
 
     Args:
-        input: 输入文本
-        instruct: 风格指令（如：用小孩子的声音开心的说）
-        read_text_only: 是否只读取纯文本（False 表示文本里包含 template）
-        prompt_speech: 参考音频（用于音色克隆）
+        input: Input text
+        instruct: Style instruction (e.g., "speak happily in a child's voice")
+        read_text_only: Whether to read only plain text (False means text contains template)
+        prompt_speech: Reference audio (for voice cloning)
     """
     assistant_prompt_audio_token = preprocess_input(prompt_speech) if prompt_speech is not None else None
 
     if not read_text_only:
-        # 不止读取文本，文本里有 template（template:text 性质）
+        # Not just reading text, text contains template (template:text format)
         text = preprocess_input(input)
         lm_prompt = _build_tts_system_prompt(
             has_voice_prompt=assistant_prompt_audio_token is not None, voice_audio_token=assistant_prompt_audio_token
@@ -458,19 +458,19 @@ def get_tts_sft_prompt(
         lm_prompt.append(create_segment(text=f"<|im_start|>user\n{text}<|im_end|>\n"))
         lm_prompt.append(create_assistant_start_with_think())
     else:
-        # 纯文本（没有指令在里面）
+        # Plain text (no instruction inside)
         language = detect_language(input)
         template = random.choice(tts_zh_templates if language == "zh" else tts_en_templates)
         text = preprocess_input(input)
 
         if instruct is None:
-            # 没有 instruct 指令
+            # No instruct instruction
             lm_prompt = [
                 create_segment(text=f"<|im_start|>user\n{template}: {text}<|im_end|>\n"),
                 create_assistant_start_with_sostm(),
             ]
         else:
-            # 有 instruct 指令
+            # Has instruct instruction
             lm_prompt = _build_tts_system_prompt(
                 has_voice_prompt=assistant_prompt_audio_token is not None,
                 voice_audio_token=assistant_prompt_audio_token,
@@ -486,7 +486,7 @@ def get_audio_understanding_sft_prompt(
     input_text,
     thinking=False,
 ):
-    """音频理解任务的 prompt 构建"""
+    """Build prompt for audio understanding task"""
     audio_tokenized = preprocess_input(input_speech)
 
     lm_prompt = create_user_turn_with_audio(audio_tokenized, extra_text=input_text)
@@ -495,7 +495,7 @@ def get_audio_understanding_sft_prompt(
 
 
 def _build_voice_prompt_system(prompt_speech) -> list[InputSegment]:
-    """构建带音色提示的 system prompt"""
+    """Build system prompt with voice prompt"""
     return create_system_turn_with_voice_prompt(
         prompt_text="Your voice should be：", audio_token=preprocess_input(prompt_speech)
     )
@@ -508,29 +508,29 @@ def get_spoken_dialogue_sft_prompt(
     add_history=False,
 ):
     """
-    语音对话任务的 prompt 构建
+    Build prompt for spoken dialogue task
 
     Args:
-        input_speech: 输入语音
-        system_prompt: 系统提示文本
-        prompt_speech: 参考音频（用于音色）
-        add_history: 是否添加历史（注：原代码中 history 变量未定义）
+        input_speech: Input speech
+        system_prompt: System prompt text
+        prompt_speech: Reference audio (for voice cloning)
+        add_history: Whether to add history (Note: history variable is undefined in original code)
     """
     audio_tokenized = preprocess_input(input_speech)
     lm_prompt = []
 
-    # 注意：原代码中 history 变量未定义，此分支可能永远不会执行
-    # 如需使用历史功能，应将 history 作为参数传入
+    # Note: history variable is undefined in original code, this branch may never execute
+    # To use history feature, history should be passed as a parameter
     if add_history:
-        # 添加历史的简化形式
+        # Simplified form of adding history
         lm_prompt = create_user_turn_with_audio(audio_tokenized)
         lm_prompt.append(create_assistant_start_with_sostm())
     else:
-        # 添加音色提示（如果有）
+        # Add voice prompt (if available)
         if prompt_speech:
             lm_prompt.extend(_build_voice_prompt_system(prompt_speech))
 
-        # 添加 user turn
+        # Add user turn
         lm_prompt.append(create_user_start())
         if system_prompt:
             lm_prompt.append(create_segment(text=system_prompt))
@@ -550,19 +550,19 @@ def get_spoken_dialogue_sft_multiturn_prompt(
     audio_channels=4,
 ):
     """
-    多轮语音对话任务的 prompt 构建
+    Build prompt for multi-turn spoken dialogue task
 
     Args:
-        message_list: 消息列表，包含 role 和 content
-        system_prompt: 系统提示文本
-        prompt_speech: 参考音频（用于音色）
-        tokenizer: 分词器
-        group_size: 分组大小
-        audio_channels: 音频通道数
+        message_list: List of messages containing role and content
+        system_prompt: System prompt text
+        prompt_speech: Reference audio (for voice cloning)
+        tokenizer: Tokenizer
+        group_size: Group size
+        audio_channels: Number of audio channels
     """
     lm_prompt = []
 
-    # 添加音色提示（如果有）
+    # Add voice prompt (if available)
     if prompt_speech:
         lm_prompt.extend(
             create_system_turn_with_voice_prompt(
@@ -570,7 +570,7 @@ def get_spoken_dialogue_sft_multiturn_prompt(
             )
         )
 
-    # 定义消息处理器
+    # Define message processors
     def user_processor(msg):
         segments = [create_user_start()]
         if system_prompt:
@@ -592,7 +592,7 @@ def get_spoken_dialogue_sft_multiturn_prompt(
             create_user_end(),
         ]
 
-    # 处理消息列表
+    # Process message list
     lm_prompt.extend(process_multiturn_messages(message_list, user_processor, assistant_processor))
     lm_prompt.append(create_assistant_start_with_sostm())
 
@@ -603,7 +603,7 @@ def get_s2t_dialogue_sft_prompt(
     input_speech,
     thinking=False,
 ):
-    """语音到文本对话任务的 prompt 构建"""
+    """Build prompt for speech-to-text dialogue task"""
     audio_tokenized = preprocess_input(input_speech)
 
     lm_prompt = create_user_turn_with_audio(audio_tokenized)
@@ -612,7 +612,7 @@ def get_s2t_dialogue_sft_prompt(
 
 
 def get_s2t_dialogue_sft_multiturn_prompt(message_list, thinking=False):
-    """多轮语音到文本对话任务的 prompt 构建"""
+    """Build prompt for multi-turn speech-to-text dialogue task"""
     lm_prompt = process_multiturn_messages(
         message_list, user_processor=create_audio_user_message, assistant_processor=create_text_assistant_message
     )
@@ -624,7 +624,7 @@ def get_text_dialogue_sft_prompt(
     input_text,
     thinking=False,
 ):
-    """纯文本对话任务的 prompt 构建"""
+    """Build prompt for text-only dialogue task"""
     lm_prompt = create_user_turn_with_text(input_text)
     lm_prompt = append_assistant_ending(lm_prompt, thinking=thinking)
     return lm_prompt
@@ -634,7 +634,7 @@ def get_text_dialogue_sft_multiturn_prompt(
     message_list,
     thinking=False,
 ):
-    """多轮纯文本对话任务的 prompt 构建"""
+    """Build prompt for multi-turn text-only dialogue task"""
     lm_prompt = process_multiturn_messages(
         message_list, user_processor=create_text_user_message, assistant_processor=create_text_assistant_message
     )
@@ -651,19 +651,19 @@ def get_in_context_learning_s2s_prompt(
     audio_channels=4,
 ):
     """
-    上下文学习 (In-Context Learning) 语音到语音任务的 prompt 构建
+    Build prompt for In-Context Learning speech-to-speech task
 
     Args:
-        instruction: 指令文本
-        prompt_examples: 示例列表，每个示例包含 input_audio, output_transcription, output_audio
-        audio: 待处理的输入音频
-        tokenizer: 分词器
-        group_size: 分组大小
-        audio_channels: 音频通道数
+        instruction: Instruction text
+        prompt_examples: List of examples, each containing input_audio, output_transcription, output_audio
+        audio: Input audio to be processed
+        tokenizer: Tokenizer
+        group_size: Group size
+        audio_channels: Number of audio channels
     """
     prompt = [create_segment(text=f"[Int]:{instruction}\n")]
 
-    # 添加示例
+    # Add examples
     for example in prompt_examples:
         prompt.extend(
             [
@@ -680,7 +680,7 @@ def get_in_context_learning_s2s_prompt(
             ]
         )
 
-    # 添加待处理的音频
+    # Add input audio to be processed
     prompt.extend(
         [
             create_segment(audio=preprocess_input(audio)),
