@@ -19,23 +19,10 @@ Wed Jan  7 17:01:31 2026
 
 # mimo-audio demo, offline
 ```BASH
-export CODE_DIR="/TO/PATH1/vllm-omni"
-export MODEL_DIR="/TO/PATH2"
-
-export PYTHONPATH=${CODE_DIR}:${PYTHONPATH}
-
-cd ${CODE_DIR}/examples/offline_inference/mimo_audio
-export MIMO_AUDIO_TOKENIZER_DEVICE="cuda:0"
-
-export CUDA_LAUNCH_BLOCKING=1
 export MIMO_AUDIO_TOKENIZER_PATH="${MODEL_DIR}/MiMo-Audio-Tokenizer"
-export MIMO_AUDIO_TOKENIZER_CONFIG_PATH=${MIMO_AUDIO_TOKENIZER_PATH}
-export MODEL_PATH="${MODEL_DIR}/MiMo-Audio-7B-Instruct"
-
-export config_file="${CODE_DIR}/vllm_omni/model_executor/stage_configs/mimo_audio.yaml"
 
 python3 -u end2end.py \
---stage-configs-path ${config_file} \
---model ${MODEL_PATH}  \
---query-type multi_audios --message-path  ./message_base64_wav.json
+--stage-configs-path vllm_omni/model_executor/stage_configs/mimo_audio.yaml \
+--model MiMo-Audio-7B-Instruct  \
+--query-type tts_sft
 ```

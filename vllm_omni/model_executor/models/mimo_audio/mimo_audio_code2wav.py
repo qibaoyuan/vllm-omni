@@ -376,10 +376,16 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
                 "`model_config.audio_tokenizer_path` in the stage config "
                 "or export MIMO_AUDIO_TOKENIZER_PATH."
             )
+        if not os.path.exists(self.audio_tokenizer_path):
+            raise ValueError(
+                "Audio tokenizer not exists. Provide "
+                "`model_config.audio_tokenizer_path` in the stage config "
+                "or export MIMO_AUDIO_TOKENIZER_PATH."
+            )
 
         self.tokenizer_config_path = (
             getattr(vllm_config.model_config, "audio_tokenizer_config_path", None)
-            or os.environ.get("MIMO_AUDIO_TOKENIZER_CONFIG_PATH")
+            or os.environ.get("MIMO_AUDIO_TOKENIZER_PATH")
             or self.config.name_or_path
         )
 
