@@ -887,9 +887,9 @@ class OmniGPUModelRunner(GPUModelRunner):
                 req_infos = getattr(req_state, "additional_information_cpu", None) if req_state is not None else None
 
                 if req_state is not None and self.model.__class__.__name__ == "MiMoAudioForConditionalGeneration":
+                    req_infos = dict(req_infos) if isinstance(req_infos, dict) else {}
                     mm_features = getattr(req_state, "mm_features", None)
                     if mm_features and (not req_infos.get("mm_features")):
-                        req_infos = dict(req_infos) if isinstance(req_infos, dict) else {}
                         req_infos["mm_features"] = mm_features
 
                 start_offset = int(self.query_start_loc.cpu[req_index])

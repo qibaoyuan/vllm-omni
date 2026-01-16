@@ -513,6 +513,7 @@ class MiMoAudioForConditionalGeneration(
 
         mm_kwargs = list[MultiModalKwargsItem]()
         mm_features = info_dict.get("mm_features", [])
+        mm_embeddings = []
         prompt_ids = torch.tensor(
             interleave_5_and_5_in_span(input_ids.tolist()),
             dtype=torch.int64,
