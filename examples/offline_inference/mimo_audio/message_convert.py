@@ -432,6 +432,21 @@ def _build_tts_system_prompt(has_voice_prompt: bool, voice_audio_token=None) -> 
         return create_system_turn_text_only("你需要根据指定的风格指令和文本内容来生成语音。")
 
 
+def _build_tts_system_prompt_no_instruct(has_voice_prompt: bool, voice_audio_token=None) -> list[InputSegment]:
+    """Build system prompt for TTS task"""
+    if has_voice_prompt and voice_audio_token is not None:
+        return [
+            create_system_start(),
+            create_segment(
+                text="你需要根据指定的风格指令和文本内容来生成和语音prompt具有相同音色的语音。你的音色应该是："
+            ),
+            create_segment(text="", audio=voice_audio_token),
+            create_user_end(),
+        ]
+    else:
+        return []
+
+
 def get_tts_sft_prompt(
     input: None | str = None,
     instruct=None,
@@ -453,7 +468,8 @@ def get_tts_sft_prompt(
         # Not just reading text, text contains template (template:text format)
         text = preprocess_input(input)
         lm_prompt = _build_tts_system_prompt(
-            has_voice_prompt=assistant_prompt_audio_token is not None, voice_audio_token=assistant_prompt_audio_token
+            has_voice_prompt=assistant_prompt_audio_token is not None,
+            voice_audio_token=assistant_prompt_audio_token,
         )
         lm_prompt.append(create_segment(text=f"<|im_start|>user\n{text}<|im_end|>\n"))
         lm_prompt.append(create_assistant_start_with_think())
@@ -465,7 +481,7 @@ def get_tts_sft_prompt(
 
         if instruct is None:
             # No instruct instruction
-            lm_prompt = _build_tts_system_prompt(
+            lm_prompt = _build_tts_system_prompt_no_instruct(
                 has_voice_prompt=assistant_prompt_audio_token is not None,
                 voice_audio_token=assistant_prompt_audio_token,
             )
@@ -726,21 +742,24 @@ def to_prompt(input_segs):
 
 
 if __name__ == "__main__":
-    # input_speech = "./spoken_dialogue_assistant_turn_1.wav"
-    # audio_list = get_audio_data(input_speech)
-    # res = get_tts_sft_prompt(
-    #     "我跑不动了，你等等我！",
-    #     read_text_only=True,
-    #     prompt_speech=input_speech,
-    # )
-    # prompt = to_prompt(res)
-    #
-    # final_prompt = {
-    #     "prompt": prompt,
-    #     "multi_modal_data": {
-    #         "audio": audio_list,
-    #     },
-    # }
+    input_speech = "./spoken_dialogue_assistant_turn_1.wav"
+    audio_list = get_audio_data(input_speech)
+    res = get_tts_sft_prompt(
+        "今天天气真好！",
+        read_text_only=True,
+        # prompt_speech=input_speech,
+    )
+    prompt = to_prompt(res)
+
+    final_prompt = {
+        "prompt": prompt,
+        "multi_modal_data": {
+            "audio": audio_list,
+        },
+    }
+    print(res)
+    print(final_prompt)
+    exit(1)
 
     # res = get_tts_sft_prompt(
     #     "用气喘吁吁的年轻男性声音说：我跑不动了，你等等我！",
