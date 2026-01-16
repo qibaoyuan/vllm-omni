@@ -212,6 +212,7 @@ def main(args):
     ]
 
     # Build query result based on query type
+    # Notice: The audio files used in this example are available at: https://github.com/XiaomiMiMo/MiMo-Audio/tree/main/examples
     if args.query_type == "tts_sft":
         # python3 -u end2end.py --stage-configs-path ${config_file} --model ${MODEL_PATH}  --query-type tts_sft
         """"
