@@ -588,7 +588,7 @@ def get_spoken_dialogue_sft_multiturn_prompt(
     if prompt_speech:
         lm_prompt.extend(
             create_system_turn_with_voice_prompt(
-                prompt_text="Your Voice Should be:", audio_token=preprocess_input(prompt_speech)
+                prompt_text="Your voice should be:", audio_token=preprocess_input(prompt_speech)
             )
         )
 

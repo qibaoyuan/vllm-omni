@@ -887,6 +887,15 @@ class OmniGPUModelRunner(GPUModelRunner):
                 req_state = self.requests.get(req_id)
                 req_infos = getattr(req_state, "additional_information_cpu", None) if req_state is not None else None
 
+                req_infos = dict(req_infos) if isinstance(req_infos, dict) else {} 
+                
+                model_cls_name = self.model.__class__.__name__
+                is_mimo_audio = (model_cls_name == "MiMoAudioForConditionalGeneration")
+                if req_state is not None and is_mimo_audio:
+                    mm_features = getattr(req_state, "mm_features", None)
+                    if mm_features and (not req_infos.get("mm_features")):
+                        req_infos["mm_features"] = mm_features
+                
                 start_offset = int(self.query_start_loc.cpu[req_index])
                 sched_tokens = int(num_scheduled_tokens_np[req_index])
                 s, e = start_offset, start_offset + sched_tokens
@@ -1004,54 +1013,3 @@ class OmniGPUModelRunner(GPUModelRunner):
             else:
                 merged[k] = v
         setattr(req_state, "additional_information_cpu", merged)
-
-    def _batch_mm_kwargs_from_scheduler(
-        self,
-        scheduler_output: "SchedulerOutput",
-    ) -> tuple[list[MultiModalKwargsItem], list[tuple[str, PlaceholderRange]]]:
-        """Batch multimodal kwargs from scheduled encoder inputs.
-
-        Args:
-            scheduler_output: The scheduler output containing scheduled encoder
-                inputs.
-
-        Returns:
-            A tuple of (mm_kwargs, req_ids_pos) where:
-            - mm_kwargs: List of multimodal kwargs items to be batched
-            - mm_hashes_pos: List of (mm_hash, position_info) tuples
-        """
-        model_name = getattr(self.vllm_config.model_config, "model", "").split("/")[-1]
-        if model_name and "MiMo-Audio" in model_name:
-            scheduled_encoder_inputs = scheduler_output.scheduled_encoder_inputs
-            if not scheduled_encoder_inputs:
-                return [], []
-            # Batch the multi-modal inputs.
-            mm_kwargs = list[MultiModalKwargsItem]()
-            # list of tuple (mm_hash, position_info)
-            mm_hashes_pos = list[tuple[str, PlaceholderRange]]()
-            for req_id, encoder_input_ids in scheduled_encoder_inputs.items():
-                req_state = self.requests[req_id]
-
-                for mm_input_id in encoder_input_ids:
-                    mm_feature = req_state.mm_features[mm_input_id]
-                    mm_hash = mm_feature.identifier
-                    mm_item = mm_feature.data
-                    if mm_item is not None:
-                        mm_item["prompt_ids"] = MultiModalFieldElem(
-                            modality=mm_item.modality,
-                            key="prompt_ids",
-                            data=req_state.prompt_token_ids,
-                            field=MultiModalBatchedField(),
-                        )
-                        mm_item["mm_offset"] = MultiModalFieldElem(
-                            modality=mm_item.modality,
-                            key="mm_offset",
-                            data=mm_feature.mm_position.offset,
-                            field=MultiModalBatchedField(),
-                        )
-                    mm_kwargs.append(mm_item)
-                    mm_hashes_pos.append((mm_hash, mm_feature.mm_position))
-
-            return mm_kwargs, mm_hashes_pos
-        else:
-            return super()._batch_mm_kwargs_from_scheduler(scheduler_output)

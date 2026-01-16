@@ -440,7 +440,7 @@ def parse_args():
     parser.add_argument(
         "--output-dir",
         default="./output_audio",
-        help="[Deprecated] Output wav directory (use --output-dir).",
+        help="Output audio wav directory.",
     )
     parser.add_argument(
         "--num-prompts",
