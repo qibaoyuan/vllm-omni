@@ -10,7 +10,6 @@ from vllm.logger import init_logger
 from vllm.model_executor.layers.rotary_embedding import MRotaryEmbedding
 from vllm.model_executor.models.interfaces import supports_mrope
 from vllm.model_executor.models.interfaces_base import VllmModelForPooling
-from vllm.multimodal.inputs import MultiModalBatchedField, MultiModalFieldElem, MultiModalKwargsItem, PlaceholderRange
 from vllm.sampling_params import SamplingType
 from vllm.utils.import_utils import LazyLoader
 from vllm.utils.math_utils import cdiv
@@ -887,15 +886,15 @@ class OmniGPUModelRunner(GPUModelRunner):
                 req_state = self.requests.get(req_id)
                 req_infos = getattr(req_state, "additional_information_cpu", None) if req_state is not None else None
 
-                req_infos = dict(req_infos) if isinstance(req_infos, dict) else {} 
-                
+                req_infos = dict(req_infos) if isinstance(req_infos, dict) else {}
+
                 model_cls_name = self.model.__class__.__name__
-                is_mimo_audio = (model_cls_name == "MiMoAudioForConditionalGeneration")
+                is_mimo_audio = model_cls_name == "MiMoAudioForConditionalGeneration"
                 if req_state is not None and is_mimo_audio:
                     mm_features = getattr(req_state, "mm_features", None)
                     if mm_features and (not req_infos.get("mm_features")):
                         req_infos["mm_features"] = mm_features
-                
+
                 start_offset = int(self.query_start_loc.cpu[req_index])
                 sched_tokens = int(num_scheduled_tokens_np[req_index])
                 s, e = start_offset, start_offset + sched_tokens

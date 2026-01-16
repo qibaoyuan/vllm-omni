@@ -19,11 +19,6 @@ from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader, maybe_remap_kv_scale_name
 from vllm.model_executor.models.interfaces import MultiModalEmbeddings, SupportsMultiModal, SupportsPP
 from vllm.model_executor.models.utils import (
-    init_vllm_registered_model,
-    is_pp_missing_parameter,
-    maybe_prefix,
-)
-from vllm.model_executor.models.utils import (
     is_pp_missing_parameter,
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY
@@ -371,7 +366,6 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         #     architectures=["Qwen2ForCausalLM"],
         # )
 
-
         self.global_sampler = MiMoSampler(do_sample=False, temperature=0.6, top_p=0.95)
         self.local_sampler = MiMoSampler(do_sample=False, temperature=0.9, top_p=0.95)
         self.removed_tokens = None
@@ -512,13 +506,13 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             for audio_length in audio_lengths:
                 mm_dummy_embeddings.append(
                     torch.zeros(
-                        (audio_length // self.group_size, self.config.hidden_size), 
+                        (audio_length // self.group_size, self.config.hidden_size),
                         dtype=torch.bfloat16,
                         device=audio_length.device,
                     )
                 )
             return tuple(mm_dummy_embeddings)
-        
+
         if kwargs.get("mimo_audio_codes_processing") is None:
             kwargs["mimo_audio_codes_processing"] = True if kwargs.get("audio_embeds") is not None else False
         audio_input = self._parse_and_validate_audio_input(**kwargs)
@@ -556,7 +550,6 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         is_multimodal: torch.Tensor | None = None,
         handle_oov_mm_token: bool = False,
     ) -> torch.Tensor:
-        
         # This is to satisfy the type checker for each overload
         if multimodal_embeddings is None or is_multimodal is None:
             return super().embed_input_ids(input_ids)
@@ -814,9 +807,9 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             use_cache=True,
         )
         # hidden_states = self.model(
-        #     input_ids, 
-        #     positions, 
-        #     intermediate_tensors, 
+        #     input_ids,
+        #     positions,
+        #     intermediate_tensors,
         #     inputs_embeds=inputs_embeds
         # )
 

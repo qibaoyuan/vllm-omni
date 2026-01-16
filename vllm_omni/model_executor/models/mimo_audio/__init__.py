@@ -1,6 +1,4 @@
-__all__ = [
-    "interleave_5_and_5_in_span"
-]
+__all__ = ["interleave_5_and_5_in_span"]
 
 
 def interleave_5_and_5_in_span(

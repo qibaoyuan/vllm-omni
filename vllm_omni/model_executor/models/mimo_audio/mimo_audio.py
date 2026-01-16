@@ -17,9 +17,12 @@ from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.multimodal.inputs import (
     AudioItem,
     ModalityData,
+    MultiModalBatchedField,
     MultiModalDataDict,
     MultiModalFieldConfig,
+    MultiModalFieldElem,
     MultiModalKwargs,
+    MultiModalKwargsItem,
 )
 from vllm.multimodal.parse import AudioProcessorItems, MultiModalDataItems, MultiModalDataParser
 from vllm.multimodal.processing import (
@@ -31,19 +34,18 @@ from vllm.multimodal.processing import (
 )
 from vllm.multimodal.profiling import BaseDummyInputsBuilder, ProcessorInputs
 from vllm.multimodal.utils import group_mm_kwargs_by_modality
-from vllm.multimodal.inputs import MultiModalBatchedField, MultiModalFieldElem, MultiModalKwargsItem, PlaceholderRange
 from vllm.sequence import IntermediateTensors
 from vllm.utils.cache import LRUCache
 from vllm.utils.collection_utils import is_list_of
+from vllm.utils.platform_utils import is_pin_memory_available
 from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.sampler import Sampler
-from vllm.utils.platform_utils import is_pin_memory_available
 
 from vllm_omni.model_executor.custom_process_mixin import CustomProcessMixin
+from vllm_omni.model_executor.models.mimo_audio import interleave_5_and_5_in_span
 from vllm_omni.model_executor.models.mimo_audio.config_mimo_audio import MiMoAudioConfig
 from vllm_omni.model_executor.models.mimo_audio.mimo_audio_code2wav import MiMoAudioTokenizerWorker
 from vllm_omni.model_executor.models.qwen2_5_omni.qwen2_5_omni import OmniOutput
-from vllm_omni.model_executor.models.mimo_audio import interleave_5_and_5_in_span
 
 _TOKENIZER_WORKER_CACHE: dict[tuple[str, str, str], MiMoAudioTokenizerWorker] = {}
 
@@ -490,20 +492,15 @@ class MiMoAudioForConditionalGeneration(
             else lambda: None
         )
 
-    def fused_thinker_talker_preprocess(
-        self, 
-        input_ids: torch.Tensor, 
-        input_embeds: torch.Tensor, 
-        **info_dict: dict
-    ):
+    def fused_thinker_talker_preprocess(self, input_ids: torch.Tensor, input_embeds: torch.Tensor, **info_dict: dict):
         # Mixed-mode support: In a single step, both Prefill*n and Decode*n are supported.
-        
+
         # Ensure we have base embeddings when only ids are provided
         if input_embeds is None and input_ids is not None:
             input_embeds = self.fused_thinker_talker.embed_input_ids(input_ids)
 
         span_len = input_ids.shape[0]
-        
+
         if span_len > 1:
             # prefill
             return self.fused_thinker_talker_prefill(input_ids, input_embeds, **info_dict)
@@ -511,23 +508,17 @@ class MiMoAudioForConditionalGeneration(
             # decode
             return self.fused_thinker_talker_decode_one_step(input_ids, input_embeds, **info_dict)
 
-
-    def fused_thinker_talker_prefill(
-        self, 
-        input_ids: torch.Tensor, 
-        input_embeds: torch.Tensor, 
-        **info_dict: dict
-    ):
+    def fused_thinker_talker_prefill(self, input_ids: torch.Tensor, input_embeds: torch.Tensor, **info_dict: dict):
         empty_token_id = self.fused_thinker_talker.empty_token_id
-        
+
         mm_kwargs = list[MultiModalKwargsItem]()
-        mm_features = info_dict.get('mm_features', [])
+        mm_features = info_dict.get("mm_features", [])
         prompt_ids = torch.tensor(
             interleave_5_and_5_in_span(input_ids.tolist()),
             dtype=torch.int64,
             device=input_ids.device,
         )
-        
+
         for mm_feature in mm_features:
             mm_item = mm_feature.data
             if mm_item is not None:
@@ -550,20 +541,15 @@ class MiMoAudioForConditionalGeneration(
             mm_kwargs_group["prompt_ids"] = prompt_ids
             mm_kwargs_group["modality_preprocess"] = True
             mm_embeddings = self.fused_thinker_talker.embed_multimodal(**mm_kwargs_group)
-            
+
         input_embeds = self.fused_thinker_talker.embed_input_ids(
-            prompt_ids, 
-            multimodal_embeddings = mm_embeddings, 
-            is_multimodal=(prompt_ids == empty_token_id)
+            prompt_ids, multimodal_embeddings=mm_embeddings, is_multimodal=(prompt_ids == empty_token_id)
         )
 
         return prompt_ids, input_embeds, info_dict
 
     def fused_thinker_talker_decode_one_step(
-        self, 
-        input_ids: torch.Tensor, 
-        input_embeds: torch.Tensor, 
-        **info_dict: dict
+        self, input_ids: torch.Tensor, input_embeds: torch.Tensor, **info_dict: dict
     ):
         return input_ids, input_embeds, info_dict
 
