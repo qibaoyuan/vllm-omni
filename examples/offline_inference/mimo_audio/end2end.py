@@ -82,10 +82,15 @@ def get_tts_sft(
     prompt = to_prompt(res)
     final_prompt = {
         "prompt": prompt,
-        "multi_modal_data": {
-            "audio": audio_list,
-        },
     }
+    if audio_list is not None:
+        final_prompt.update(
+            {
+                "multi_modal_data": {
+                    "audio": audio_list,
+                },
+            }
+        )
     return final_prompt
 
 
@@ -224,7 +229,7 @@ def main(args):
         """
         query_result = query_func(text=text, instruct=instruct, read_text_only=True)
     elif args.query_type == "tts_sft_with_audio":
-        # python3 -u end2end.py --stage-configs-path ${config_file} --model ${MODEL_PATH}  --query-type tts_sft_with_audio --audio_path /mnt/user/qibaoyuan/vllm-omni-dev/examples/offline_inference/mimo_audio/qa_car_24k.wav
+        # python3 -u end2end.py --stage-configs-path ${config_file} --model ${MODEL_PATH}  --query-type tts_sft_with_audio --audio_path "./spoken_dialogue_assistant_turn_1.wav"
         audio_list = [get_audio_data(audio_path)]
         query_result = query_func(text=text, read_text_only=True, prompt_speech=audio_path, audio_list=audio_list)
     elif args.query_type == "tts_sft_with_natural_instruction":
