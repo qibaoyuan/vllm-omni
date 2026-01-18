@@ -19,7 +19,9 @@ from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader, maybe_remap_kv_scale_name
 from vllm.model_executor.models.interfaces import MultiModalEmbeddings, SupportsMultiModal, SupportsPP
 from vllm.model_executor.models.utils import (
+    init_vllm_registered_model,
     is_pp_missing_parameter,
+    maybe_prefix,
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.multimodal.inputs import (
@@ -357,14 +359,23 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         self.quant_config = quant_config
 
         vllm_config.model_config.hf_config = self.config
-        self.model = MiMoAudioQwen2Model(config=self.config)
-        # self.model = init_vllm_registered_model(
-        #     vllm_config=vllm_config,
-        #     # hf_config=config,
-        #     prefix=maybe_prefix(prefix, "model"),
-        #     # hf_config=thinker_config.text_config,
-        #     architectures=["Qwen2ForCausalLM"],
-        # )
+
+        # Configure MRoPE parameters for multimodal rotary embeddings
+        mrope_config = {
+            "mrope_section": [16, 24, 24],
+            "rope_type": "default",
+            "type": "default",
+        }
+        setattr(vllm_config.model_config.hf_config, "rope_scaling", mrope_config)
+        vllm_config.model_config.hf_config.rope_parameters.update(mrope_config)
+
+        self.model = init_vllm_registered_model(
+            vllm_config=vllm_config,
+            # hf_config=config,
+            prefix=maybe_prefix(prefix, "model"),
+            # hf_config=thinker_config.text_config,
+            architectures=["Qwen2ForCausalLM"],
+        )
 
         self.global_sampler = MiMoSampler(do_sample=False, temperature=0.6, top_p=0.95)
         self.local_sampler = MiMoSampler(do_sample=False, temperature=0.9, top_p=0.95)
@@ -389,6 +400,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             config.hidden_size,
             self.local_config.hidden_size,
             bias=False,
+            return_bias=False,
         )
 
         self.lm_head = ColumnParallelLinear(
@@ -441,7 +453,6 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             self.speech_embeddings_to_local = None
 
         self._cached_new_audio_emb_by_req: dict[str, torch.Tensor] = {}
-        self._cached_past_key_values_by_req: dict[str, DynamicCache | None] = {}
 
         # Pre-allocate audio_embeds buffer for CUDA graph capture to avoid dynamic allocation
         # Maximum sequence length set to 8192, can be adjusted according to actual needs
@@ -660,7 +671,6 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         self,
         request_ids: list[str] | None,
     ) -> tuple[DynamicCache | None, dict[str, torch.Tensor]]:
-        past_key_values: DynamicCache | None = None
         prev_new_audio_emb_by_req: dict[str, torch.Tensor] = {}
 
         if hasattr(self, "_cached_new_audio_emb_by_req"):
@@ -668,12 +678,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
                 if req_id not in prev_new_audio_emb_by_req:
                     prev_new_audio_emb_by_req[req_id] = cached_emb
 
-        if hasattr(self, "_cached_past_key_values_by_req"):
-            for req_id in request_ids or []:
-                if req_id in self._cached_past_key_values_by_req:
-                    past_key_values = self._cached_past_key_values_by_req[req_id]
-
-        return past_key_values, prev_new_audio_emb_by_req
+        return prev_new_audio_emb_by_req
 
     def _prepare_multimodal_embeddings_with_cache(
         self,
@@ -720,7 +725,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         hs_downsampled = self.hidden_states_downcast(hidden_states[:, -1:, :])
 
         next_speech_tokens = self.local_forward(
-            local_embeds=hs_downsampled[0],
+            local_embeds=hs_downsampled,
             local_sampler=self.local_sampler,
         )
 
@@ -760,34 +765,14 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         inputs_embeds: torch.Tensor | None = None,
         **kwargs: object,
     ) -> torch.Tensor | IntermediateTensors:
-        B = input_ids.shape[0]
         request_ids: list[str] | None = kwargs.get("request_ids")
         is_capturing = torch.cuda.is_current_stream_capturing()
-        new_len = self._prepare_input_parameters(input_ids, inputs_embeds)
 
         _merge_multimodal_embedding, kwargs = self._should_merge_multimodal_embedding(
             input_ids, inputs_embeds, is_capturing, kwargs
         )
 
-        past_key_values, prev_new_audio_emb_by_req = self._load_cached_state(request_ids)
-
-        past_len = self._get_past_len(past_key_values)
-        attn_len = past_len + new_len
-
-        # Use pre-allocated buffer or dynamically create in non-capture mode
-        if is_capturing:
-            # Use pre-allocated buffer during CUDA graph capture
-            if not hasattr(self, "_attention_mask_buffer") or self._attention_mask_buffer.shape[1] < attn_len:
-                # This branch should not execute during capture, but as a safety measure
-                attention_mask = torch.ones((B, attn_len), device=input_ids.device, dtype=torch.bool)
-            else:
-                attention_mask = self._attention_mask_buffer[:B, :attn_len]
-        else:
-            attention_mask = torch.ones(
-                (B, attn_len),
-                device=input_ids.device,
-                dtype=torch.bool,
-            )
+        prev_new_audio_emb_by_req = self._load_cached_state(request_ids)
 
         # NOTE: In v1, inputs_embeds is always generated at model runner, this
         # condition is for v0 compatibility.
@@ -796,30 +781,15 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
                 input_ids, request_ids, prev_new_audio_emb_by_req, kwargs
             )
 
-        # Do not pass attention_mask during CUDA graph capture to avoid HuggingFace internal .all() calls
-        model_attention_mask = None if is_capturing else attention_mask
-
-        outputs = self.model(
-            attention_mask=model_attention_mask,
-            position_ids=positions,
-            past_key_values=past_key_values,
-            inputs_embeds=inputs_embeds,
-            use_cache=True,
+        hidden_states = self.model(
+            input_ids,
+            positions,
+            intermediate_tensors,
+            inputs_embeds=inputs_embeds
         )
-        # hidden_states = self.model(
-        #     input_ids,
-        #     positions,
-        #     intermediate_tensors,
-        #     inputs_embeds=inputs_embeds
-        # )
-
-        # Commented out for vllm qwen2forcausallm
-        hidden_states = outputs.last_hidden_state
-        new_past_key_values = outputs.past_key_values
-        # new_past_key_values = None
 
         logits = self.compute_logits(hidden_states)
-        next_ids = self.global_sampler.sample(logits, removed_tokens=self.removed_tokens)
+        next_ids = self.global_sampler.sample(logits[-1:, :], removed_tokens=self.removed_tokens)
 
         new_audio_emb = None
         next_speech_tokens = None
@@ -830,23 +800,17 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             should_do_local_forward = True
 
         if should_do_local_forward:
-            next_speech_tokens, new_audio_emb = self._generate_speech_tokens_and_audio_embeddings(hidden_states)
+            next_speech_tokens, new_audio_emb = self._generate_speech_tokens_and_audio_embeddings(hidden_states.unsqueeze(0))
 
-        self._update_request_caches(request_ids, new_past_key_values, new_audio_emb)
+        self._update_request_caches(request_ids, new_audio_emb)
 
         return next_speech_tokens, hidden_states
 
     def _update_request_caches(
         self,
         request_ids: list[str] | None,
-        new_past_key_values: DynamicCache | None,
         new_audio_emb: torch.Tensor | None,
     ) -> None:
-        if new_past_key_values is not None:
-            if request_ids and len(request_ids) == 1:
-                req_id = request_ids[0]
-                self._cached_past_key_values_by_req[req_id] = new_past_key_values
-
         # If new_audio_emb is generated, need to store it for next round use
         # In multi-request scenarios, need to store each request's new_audio_emb based on request_id
         if new_audio_emb is not None:
@@ -895,6 +859,8 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
 
         loaded_params: set[str] = set()
         for name, loaded_weight in weights:
+            if name.startswith("model."):
+                name = "model." + name
             if self.quant_config is not None and (scale_name := self.quant_config.get_cache_scale(name)):
                 # Loading kv cache quantization scales
                 param = params_dict[scale_name]
@@ -907,8 +873,6 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             for param_name, weight_name, shard_id in stacked_params_mapping:
                 if name.startswith("input_local_transformer.") or name.startswith("local_transformer."):
                     continue
-                if name.startswith("model."):
-                    continue
                 if weight_name not in name:
                     continue
                 name = name.replace(weight_name, param_name)
@@ -919,7 +883,6 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
                     continue
                 param = params_dict[name]
                 weight_loader = getattr(param, "weight_loader", default_weight_loader)
-                print("loaded_weight,name", name)
                 if weight_loader == default_weight_loader:
                     weight_loader(param, loaded_weight)
                 else:
@@ -938,7 +901,6 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
                 if name not in params_dict:
                     continue
                 param = params_dict[name]
-                print("loaded_weight,name", name)
                 weight_loader = getattr(param, "weight_loader", default_weight_loader)
                 weight_loader(param, loaded_weight)
             loaded_params.add(name)
