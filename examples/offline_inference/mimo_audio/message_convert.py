@@ -732,9 +732,21 @@ def to_prompt(input_segs):
     out_put = []
 
     for input_seg in input_segs:
-        out_put.append(input_seg.text)
-        if input_seg.audio is not None:
-            out_put.append(input_seg.audio)
+        if isinstance(input_seg, StreamingInputSegment) and input_seg.text:
+            out_put.append("<|sostm|>")
+            if input_seg.audio is not None and isinstance(input_seg.audio, str):
+                out_put.append(input_seg.text)
+                out_put.append("<|eot|>")
+                out_put.append("<|empty|>")
+            else:
+                out_put.append(input_seg.text)
+                out_put.append("<|eot|>")
+            out_put.append("<|eostm|>")
+
+        else:
+            out_put.append(input_seg.text)
+            if input_seg.audio is not None:
+                out_put.append(input_seg.audio)
 
     prompt = "".join(out_put)
     print("to_prompt,prompt->", prompt)

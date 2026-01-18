@@ -368,7 +368,7 @@ def main(args):
 
                 # Save audio file with explicit WAV format
                 sf.write(output_wav, audio_numpy, samplerate=24000, format="WAV")
-                print(f"Request ID: {request_id}, Saved audio to {output_wav}")
+                print(f"Request ID: {request_id}, Audio saved to {output_wav}")
 
 
 def parse_args():

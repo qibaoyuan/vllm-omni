@@ -32,6 +32,7 @@ from vllm.multimodal.processing import (
     PromptUpdate,
     PromptUpdateDetails,
 )
+from vllm.config.multimodal import BaseDummyOptions
 from vllm.multimodal.profiling import BaseDummyInputsBuilder, ProcessorInputs
 from vllm.multimodal.utils import group_mm_kwargs_by_modality
 from vllm.sequence import IntermediateTensors
@@ -115,16 +116,21 @@ class MiMoAudioLLMDummyInputsBuilder(BaseDummyInputsBuilder[MiMoAudioLLMProcessi
 
     def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:
         num_audios = mm_counts.get("audio", 0)
-        return "<|empty|>" * num_audios
+        return (" <|empty|>" * num_audios).strip()
 
-    def get_dummy_mm_data(self, seq_len: int, mm_counts: Mapping[str, int]) -> MultiModalDataDict:
+    def get_dummy_mm_data(
+        self,
+        seq_len: int,
+        mm_counts: Mapping[str, int],
+        mm_options: Mapping[str, BaseDummyOptions] | None = None
+    ) -> MultiModalDataDict:
         num_audios = mm_counts.get("audio", 0)
         if num_audios == 0:
             return {}
         # Return dummy raw audio data (not encoded codes)
         # This will be processed by _parse_audio_data like real audio
         # Use 1 second of audio at target_sr (24000 Hz)
-        dummy_audio_length = 100  # 1 second at 24kHz
+        dummy_audio_length = mm_options.get("audio").length if mm_options else 24000  # 1 second at 24kHz
         dummy_audio = np.zeros((dummy_audio_length,), dtype=np.float32)
         return {"audio": [(dummy_audio, 24000)] * num_audios}
 
@@ -132,6 +138,7 @@ class MiMoAudioLLMDummyInputsBuilder(BaseDummyInputsBuilder[MiMoAudioLLMProcessi
         self,
         seq_len: int,
         mm_counts: Mapping[str, int],
+        mm_options: Mapping[str, BaseDummyOptions] | None = None,
     ) -> ProcessorInputs:
         num_audios = mm_counts.get("audio", 0)
         cache_key = f"mimo_audio_dummy_processor_inputs_{seq_len}_{num_audios}"
@@ -140,7 +147,7 @@ class MiMoAudioLLMDummyInputsBuilder(BaseDummyInputsBuilder[MiMoAudioLLMProcessi
             return dummy_processor_inputs
 
         dummy_text = self.get_dummy_text(mm_counts)
-        dummy_mm_data = self.get_dummy_mm_data(seq_len, mm_counts)
+        dummy_mm_data = self.get_dummy_mm_data(seq_len, mm_counts, mm_options)
 
         dummy_processor_inputs = ProcessorInputs(
             prompt=dummy_text,
@@ -704,7 +711,7 @@ class MiMoAudioForConditionalGeneration(
             )
 
             return OmniOutput(
-                text_hidden_states=(text_hidden_states.squeeze(0) if added_batch_dim else text_hidden_states),
+                text_hidden_states=text_hidden_states.reshape(-1, text_hidden_states.shape[-1]),
                 multimodal_outputs={"code": next_speech_tokens},
             )
 
@@ -760,7 +767,7 @@ class MiMoAudioForConditionalGeneration(
         # Run llm
         llm_output = self.fused_thinker_talker(
             input_ids=input_ids,
-            positions=positions,
+            positions=positions[0],
             intermediate_tensors=intermediate_tensors,
             inputs_embeds=inputs_embeds,
             **kwargs,
