@@ -781,12 +781,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
                 input_ids, request_ids, prev_new_audio_emb_by_req, kwargs
             )
 
-        hidden_states = self.model(
-            input_ids,
-            positions,
-            intermediate_tensors,
-            inputs_embeds=inputs_embeds
-        )
+        hidden_states = self.model(input_ids, positions, intermediate_tensors, inputs_embeds=inputs_embeds)
 
         logits = self.compute_logits(hidden_states)
         next_ids = self.global_sampler.sample(logits[-1:, :], removed_tokens=self.removed_tokens)
@@ -800,7 +795,9 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             should_do_local_forward = True
 
         if should_do_local_forward:
-            next_speech_tokens, new_audio_emb = self._generate_speech_tokens_and_audio_embeddings(hidden_states.unsqueeze(0))
+            next_speech_tokens, new_audio_emb = self._generate_speech_tokens_and_audio_embeddings(
+                hidden_states.unsqueeze(0)
+            )
 
         self._update_request_caches(request_ids, new_audio_emb)
 
