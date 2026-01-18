@@ -507,12 +507,13 @@ def get_audio_understanding_sft_prompt(
     input_speech,
     input_text,
     thinking=False,
+    use_sostm=False,
 ):
     """Build prompt for audio understanding task"""
     audio_tokenized = preprocess_input(input_speech)
 
     lm_prompt = create_user_turn_with_audio(audio_tokenized, extra_text=input_text)
-    lm_prompt = append_assistant_ending(lm_prompt, thinking=thinking)
+    lm_prompt = append_assistant_ending(lm_prompt, thinking=thinking, use_sostm=use_sostm)
     return lm_prompt
 
 
@@ -749,7 +750,7 @@ def to_prompt(input_segs):
                 out_put.append(input_seg.audio)
 
     prompt = "".join(out_put)
-    print("to_prompt,prompt->", prompt)
+    print("to_prompt,prompt->", repr(prompt))
     return prompt
 
 

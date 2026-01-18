@@ -94,10 +94,10 @@ def get_tts_sft(
     return final_prompt
 
 
-def get_audio_understanding_sft(audio_path, text="", thinking=False):
+def get_audio_understanding_sft(audio_path, text="", thinking=False, use_sostm=False):
     audio_list = []
     audio_list.append(get_audio_data(audio_path))
-    res = get_audio_understanding_sft_prompt(input_speech=audio_path, input_text=text, thinking=thinking)
+    res = get_audio_understanding_sft_prompt(input_speech=audio_path, input_text=text, thinking=thinking, use_sostm=use_sostm)
     prompt = to_prompt(res)
     final_prompt = {
         "prompt": prompt,
@@ -155,6 +155,7 @@ query_map = {
     "tts_sft_with_instruct": get_tts_sft,
     "tts_sft_with_audio": get_tts_sft,
     "tts_sft_with_natural_instruction": get_tts_sft,
+    "audio_trancribing_sft": get_audio_understanding_sft,
     "audio_understanding_sft": get_audio_understanding_sft,
     "audio_understanding_sft_with_thinking": get_audio_understanding_sft,
     "spoken_dialogue_sft_multiturn": get_spoken_dialogue_sft_multiturn,
@@ -240,6 +241,16 @@ def main(args):
         Request ID: 0_7c161be3-96d3-46b1-9981-a59fa1ae81e5, Text saved to ./output_audio/tts_sft_with_natural_instruction/0_7c161be3-96d3-46b1-9981-a59fa1ae81e5.txt
         Request ID: 0_7c161be3-96d3-46b1-9981-a59fa1ae81e5, Saved audio to ./output_audio/tts_sft_with_natural_instruction/0_7c161be3-96d3-46b1-9981-a59fa1ae81e5.wav        """
         query_result = query_func(text=text, read_text_only=False)
+    elif args.query_type == "audio_trancribing_sft":
+        # python3 -u end2end.py --stage-configs-path ${config_file_only_llm} --model ${MODEL_PATH}  --query-type audio_trancribing_sft --audio_path "./spoken_dialogue_assistant_turn_1.wav"
+        """
+        lines ['Prompt:\n', '<|im_start|>user\n<|sosp|><|empty|><|eosp|>请将这段语音内容生成对应文字，并复述一遍<|im_end|>\n<|im_start|>assistant\n<|sostm|>\n', 'vllm_text_output:\n', '今天天气如何？\n']
+        Request ID: 0_a9c107ec-7a4e-44fe-a304-d3ee6e1dcca6, Text saved to ./output_audio/audio_trancribe_sft/0_a9c107ec-7a4e-44fe-a304-d3ee6e1dcca6.txt
+        Request ID: 0_a9c107ec-7a4e-44fe-a304-d3ee6e1dcca6, Audio saved to ./output_audio/audio_trancribe_sft/0_a9c107ec-7a4e-44fe-a304-d3ee6e1dcca6.wav
+        """
+        audio_path = "spoken_dialogue_assistant_turn_1.wav"
+        text = "请将这段语音内容生成对应文字，并复述一遍"
+        query_result = query_func(text=text, audio_path=audio_path, use_sostm=True)
     elif args.query_type == "audio_understanding_sft":
         # python3 -u end2end.py --stage-configs-path ${config_file_only_llm} --model ${MODEL_PATH}  --query-type audio_understanding_sft --text "Summarize the audio." --audio_path "./spoken_dialogue_assistant_turn_1.wav"
         """
