@@ -8,9 +8,9 @@ Please refer to [README.md](../../../README.md)
 
 ### Launch the Server
 ```bash
-export MIMO_AUDIO_TOKENIZER_PATH="./MiMo-Audio-Tokenizer"
+export MIMO_AUDIO_TOKENIZER_PATH="XiaomiMiMo/MiMo-Audio-Tokenizer"
 
-vllm-omni serve ./MiMo-Audio-7B-Instruct --omni \
+vllm-omni serve XiaomiMiMo/MiMo-Audio-7B-Instruct --omni \
 --served-model-name "MiMo-Audio-7B-Instruct"  \
 --port 8091 --stage-configs-path ./vllm_omni/model_executor/stage_configs/mimo_audio.yaml \
 --chat-template ./examples/online_serving/mimo_audio/chat_template.jinja
