@@ -95,7 +95,8 @@ class MiMoSampler:
         return torch.argmax(scores, dim=-1)
 
 
-
+# CUDA Graph implementation for local_forward, adapted from sglang's mimo_audio
+# Based on work by yanyihan@xiaomi.com
 @dataclass
 class MiMoLocalSamplerTensor:
     temperature: torch.Tensor
