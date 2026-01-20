@@ -516,8 +516,8 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             architectures=["Qwen2ForCausalLM"],
         )
 
-        self.global_sampler = MiMoSampler(do_sample=False, temperature=0.6, top_p=0.95)
-        self.local_sampler = MiMoSampler(do_sample=False, temperature=0.9, top_p=0.95)
+        self.global_sampler = MiMoSampler(do_sample=False, temperature=0.6, top_k=50, top_p=0.95)
+        self.local_sampler = MiMoSampler(do_sample=False, temperature=0.9, top_k=50, top_p=0.95)
         self.removed_tokens = None
 
         self.speech_vocab_sizes = config.parsed_speech_vocab_sizes()
@@ -618,7 +618,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         self.local_forward_cg: MiMoLocalDecodeCudaGraph | None = None
         self.local_forward_buf: MiMoLocalDecodeBuffer | None = None
         try:
-            if torch.cuda.is_available():
+            if False:  # torch.cuda.is_available():
                 self.local_forward_buf = MiMoLocalDecodeBuffer(self, max_batch_size=1)
                 self.local_forward_cg = MiMoLocalDecodeCudaGraph.capture(
                     self,
@@ -796,7 +796,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             and (local_sampler.do_sample is None or local_sampler.do_sample is False)
         )
         if use_cg:
-            # print("Using CUDA graph for local_forward")
+            print("Using CUDA graph for local_forward", "local_sampler", local_sampler)
             return self.local_forward_cg.forward(local_embeds, local_sampler)
 
         return self.base_local_forward(
