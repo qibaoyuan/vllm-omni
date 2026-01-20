@@ -1,10 +1,10 @@
 # Copyright 2025 Xiaomi Corporation.
 """Inference-only Qwen2-Audio model compatible with HuggingFace weights."""
 
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
 import logging
 import threading
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
 import torch
@@ -144,9 +144,7 @@ class MiMoLocalDecodeBuffer:
         hidden_size = model.local_config.hidden_size
 
         self.pool = torch.cuda.graph_pool_handle()
-        self.input_tensor = torch.zeros(
-            (max_batch_size, 1, hidden_size), dtype=dtype, device=device
-        )
+        self.input_tensor = torch.zeros((max_batch_size, 1, hidden_size), dtype=dtype, device=device)
         self.sampler = MiMoLocalSamplerTensor(
             temperature=torch.ones(max_batch_size, dtype=torch.float32, device=device),
             top_k=torch.full((max_batch_size,), -1, dtype=torch.int64, device=device),
@@ -164,9 +162,7 @@ class MiMoLocalDecodeBuffer:
 
     def prepare(self, input_tensor: torch.Tensor, sampler: MiMoSampler | MiMoLocalSamplerTensor):
         b = input_tensor.shape[0]
-        assert b <= self.max_batch_size, (
-            f"Expected batch size <= {self.max_batch_size}, got {b}"
-        )
+        assert b <= self.max_batch_size, f"Expected batch size <= {self.max_batch_size}, got {b}"
 
         self.input_tensor[:b].copy_(input_tensor)
 
@@ -221,9 +217,7 @@ class MiMoLocalDecodeCudaGraph:
 
     def forward(self, local_embeds: torch.Tensor, local_sampler: MiMoSampler | MiMoLocalSamplerTensor) -> torch.Tensor:
         b = local_embeds.shape[0]
-        assert b <= self.batch_size, (
-            f"Expected batch size <= {self.batch_size}, got {b}"
-        )
+        assert b <= self.batch_size, f"Expected batch size <= {self.batch_size}, got {b}"
         with self.buffer.lock:
             torch.cuda.synchronize()
             self.buffer.prepare(local_embeds, local_sampler)
@@ -234,7 +228,6 @@ class MiMoLocalDecodeCudaGraph:
             if self.output_tensor.dim() == 2:
                 return self.output_tensor.clone()
             return self.output_tensor[:b].clone()
-
 
 
 class MiMoAudioQwen2Model(TransformerQwen2Model):
@@ -622,7 +615,6 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             persistent=False,
         )
 
-        
         self.local_forward_cg: MiMoLocalDecodeCudaGraph | None = None
         self.local_forward_buf: MiMoLocalDecodeBuffer | None = None
         try:
@@ -637,13 +629,9 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             else:
                 logger.info("CUDA not available; skip local_forward CUDA graph capture.")
         except Exception as e:
-            logger.warning(
-                f"Failed to capture local_forward CUDA graph: {e}. "
-                "Falling back to eager local_forward."
-            )
+            logger.warning(f"Failed to capture local_forward CUDA graph: {e}. Falling back to eager local_forward.")
             self.local_forward_cg = None
             self.local_forward_buf = None
-        
 
     def _validate_and_reshape_mm_tensor(self, mm_input: object, name: str) -> torch.Tensor:
         if not isinstance(mm_input, (torch.Tensor, list)):
@@ -741,7 +729,6 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             handle_oov_mm_token=handle_oov_mm_token,
         )
 
-    
     def base_local_forward(
         self,
         local_embeds: torch.FloatTensor,  # [1, 1, hidden_size]
@@ -818,7 +805,6 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             tokens_device=tokens_device,
             local_sampler=local_sampler,
         )
-    
 
     def _prepare_input_parameters(
         self,
