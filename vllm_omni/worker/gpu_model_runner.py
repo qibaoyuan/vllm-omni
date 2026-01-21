@@ -38,11 +38,23 @@ class OmniGPUModelRunner(GPUModelRunner):
         self._omni_per_req_additional_information: dict[str, dict] | None = None
         self._omni_num_scheduled_tokens_np: np.ndarray | None = None
         self._omni_last_model_output: object | None = None
+        # 缓存模型属性检查结果，避免在 CUDA graph 热路径中重复调用 hasattr
+        self._model_has_preprocess: bool = False
+        self._model_has_postprocess: bool = False
+        self._model_has_talker_mtp: bool = False
+        self._model_has_make_omni_output: bool = False
+        self._model_has_multimodal_outputs: bool = False
 
     def load_model(self, *args, **kwargs) -> None:
         super().load_model(*args, **kwargs)
+        # 在初始化时缓存属性检查结果，避免在热路径中重复调用 hasattr
+        self._model_has_preprocess = hasattr(self.model, "has_preprocess") and getattr(self.model, "has_preprocess", False)
+        self._model_has_postprocess = hasattr(self.model, "has_postprocess") and getattr(self.model, "has_postprocess", False)
+        self._model_has_talker_mtp = hasattr(self.model, "talker_mtp") and getattr(self.model, "talker", None) is not None
+        self._model_has_make_omni_output = hasattr(self.model, "make_omni_output")
+        self._model_has_multimodal_outputs = hasattr(self.model, "have_multimodal_outputs") and getattr(self.model, "have_multimodal_outputs", False)
         # TODO move this model specific logic to a separate class
-        if hasattr(self.model, "talker_mtp") and self.model.talker is not None:
+        if self._model_has_talker_mtp:
             self.talker_mtp = self.model.talker_mtp
             cudagraph_mode = self.compilation_config.cudagraph_mode
             assert cudagraph_mode is not None
@@ -332,9 +344,9 @@ class OmniGPUModelRunner(GPUModelRunner):
 
     @torch.inference_mode()
     def extract_multimodal_outputs(self, hidden_states: torch.Tensor | list[torch.Tensor] | OmniOutput) -> dict:
+        # 使用缓存的标志，避免在 CUDA graph 热路径中调用 hasattr
         if (
-            hasattr(self.model, "have_multimodal_outputs")
-            and self.model.have_multimodal_outputs
+            self._model_has_multimodal_outputs
             and isinstance(hidden_states, OmniOutput)
         ):
             text_hidden_states = hidden_states.text_hidden_states
@@ -550,7 +562,7 @@ class OmniGPUModelRunner(GPUModelRunner):
                 num_tokens_padded = ubatch_slices[0].num_tokens
                 if num_tokens_across_dp is not None:
                     num_tokens_across_dp[:] = num_tokens_padded
-
+            
             with (
                 self.maybe_randomize_inputs(input_ids),
                 set_forward_context(
@@ -563,7 +575,8 @@ class OmniGPUModelRunner(GPUModelRunner):
                     ubatch_slices=ubatch_slices,
                 ),
             ):
-                if getattr(self.model, "talker", None) is not None and hasattr(self.model, "talker_mtp"):
+                # 使用缓存的标志，避免在 CUDA graph 热路径中调用 hasattr
+                if self._model_has_talker_mtp:
                     outputs = self.talker_mtp(
                         self.talker_mtp_input_ids.gpu[:num_tokens_padded],
                         self.talker_mtp_inputs_embeds.gpu[:num_tokens_padded],
@@ -721,7 +734,8 @@ class OmniGPUModelRunner(GPUModelRunner):
         try:
             # execute the custom postprocess function
             # TODO(Peiqi): do we have a more elegant way to do this?
-            if hasattr(self.model, "has_postprocess") and self.model.has_postprocess:
+            # 使用缓存的标志，避免在 CUDA graph 热路径中调用 hasattr
+            if self._model_has_postprocess:
                 for req_index, req_id in enumerate(self.input_batch.req_ids):
                     req_state = self.requests.get(req_id)
                     req_infos = (
@@ -878,7 +892,8 @@ class OmniGPUModelRunner(GPUModelRunner):
             # Prefill: overlay prompt_embeds and collect additional_information
             self._collect_additional_information_for_prefill(num_scheduled_tokens_np)
 
-        if hasattr(self.model, "has_preprocess") and self.model.has_preprocess:
+        # 使用缓存的标志，避免在 CUDA graph 热路径中调用 hasattr
+        if self._model_has_preprocess:
             # Overlay custom prompt_embeds per request for the prompt portion;
             # collect additional_information (tensor/list) for prefill portion only
             decode_req_ids = []
@@ -892,6 +907,9 @@ class OmniGPUModelRunner(GPUModelRunner):
                     if mm_features and (not req_infos.get("mm_features")):
                         req_infos["mm_features"] = mm_features
 
+                if req_infos is None:
+                    req_infos = {}
+
                 start_offset = int(self.query_start_loc.cpu[req_index])
                 sched_tokens = int(num_scheduled_tokens_np[req_index])
                 s, e = start_offset, start_offset + sched_tokens
@@ -901,7 +919,9 @@ class OmniGPUModelRunner(GPUModelRunner):
                 req_input_ids, req_embeds, update_dict = self.model.preprocess(
                     input_ids=input_ids[s:e], input_embeds=inputs_embeds[s:e], **req_infos
                 )
-                if hasattr(self.model, "talker_mtp") and span_len == 1:
+                # // AIGC START
+                # 使用缓存的标志，避免在 CUDA graph 热路径中调用 hasattr
+                if self._model_has_talker_mtp and span_len == 1:
                     last_talker_hidden, text_step = update_dict.pop("mtp_inputs")
                     decode_slice = slice(len(decode_req_ids), len(decode_req_ids) + 1)
                     self.talker_mtp_input_ids.gpu[decode_slice].copy_(req_input_ids)
@@ -920,7 +940,8 @@ class OmniGPUModelRunner(GPUModelRunner):
                     input_ids[s : s + seg_len] = req_input_ids
 
             # run talker mtp decode
-            if hasattr(self.model, "talker_mtp"):
+            # 使用缓存的标志，避免在 CUDA graph 热路径中调用 hasattr
+            if self._model_has_talker_mtp:
                 self._talker_mtp_forward(decode_req_ids, inputs_embeds)
 
         return (
@@ -985,7 +1006,8 @@ class OmniGPUModelRunner(GPUModelRunner):
             **model_kwargs,
             **model_kwargs_extra,
         )
-        if not isinstance(model_output, OmniOutput) and hasattr(self.model, "make_omni_output"):
+        # 使用缓存的标志，避免在 CUDA graph 热路径中调用 hasattr
+        if not isinstance(model_output, OmniOutput) and self._model_has_make_omni_output:
             model_output = self.model.make_omni_output(model_output, **model_kwargs_extra)
         # Cache model output so later sample_tokens can consume multimodal results.
         self._omni_last_model_output = model_output

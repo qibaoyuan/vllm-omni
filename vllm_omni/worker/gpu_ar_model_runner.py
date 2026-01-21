@@ -191,11 +191,32 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 hidden_states, aux_hidden_states = model_output
             else:
                 # Common case.
+                # NOTE: some omni models may return a tuple instead of an OmniOutput,
+                # e.g. MiMoAudioLLMForConditionalGeneration.forward returns
+                # (next_speech_tokens, hidden_states).
                 hidden_states = model_output
                 aux_hidden_states = None
 
-            multimodal_outputs = model_output.multimodal_outputs
-            hidden_states = model_output.text_hidden_states
+            # Normalize model outputs:
+            # - OmniOutput: has .text_hidden_states / .multimodal_outputs
+            # - tuple/list: may be (next_speech_tokens, hidden_states)
+            if isinstance(model_output, (tuple, list)):
+                multimodal_outputs = {}
+                if len(model_output) >= 2 and isinstance(model_output[1], (torch.Tensor, IntermediateTensors)):
+                    next_speech_tokens = model_output[0]
+                    hidden_states = model_output[1]
+                    if isinstance(next_speech_tokens, torch.Tensor):
+                        multimodal_outputs["next_speech_tokens"] = next_speech_tokens
+                else:
+                    hidden_states = model_output[0]
+            else:
+                multimodal_outputs = getattr(model_output, "multimodal_outputs", None)
+                hidden_states = getattr(model_output, "text_hidden_states", model_output)
+
+            # Some omni models may return tuple/list for text_hidden_states
+            # (e.g., (hidden_states, extra_outputs)). AR runner expects a Tensor.
+            if isinstance(hidden_states, (tuple, list)):
+                hidden_states = hidden_states[0]
 
             if multimodal_outputs is not None:
                 keys_or_type = (
@@ -387,6 +408,29 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 dtype=np.int32,
             )
 
+        # Inject sampled_token_id and request_id into per-request info for postprocess.
+        sampled_token_ids_list: list[int] = []
+        if isinstance(valid_sampled_token_ids, torch.Tensor):
+            sampled_token_ids_list = [int(t) for t in valid_sampled_token_ids.tolist()]
+        elif isinstance(valid_sampled_token_ids, (list, tuple)):
+            for t in valid_sampled_token_ids:
+                if isinstance(t, (list, tuple)) and t:
+                    sampled_token_ids_list.append(int(t[0]))
+                elif isinstance(t, (list, tuple)):
+                    continue
+                else:
+                    sampled_token_ids_list.append(int(t))
+        for rid, token_id in zip(req_ids_output_copy, sampled_token_ids_list):
+            req_state = self.requests.get(rid)
+            if req_state is None:
+                continue
+            info = getattr(req_state, "additional_information_cpu", None)
+            if not isinstance(info, dict):
+                info = {}
+            info["sampled_token_id"] = int(token_id)
+            info["request_id"] = rid
+            setattr(req_state, "additional_information_cpu", info)
+
         self._process_additional_information_updates(hidden_states, multimodal_outputs, num_scheduled_tokens_np)
 
         pooler_output: list[dict[str, object]] = []
@@ -419,6 +463,13 @@ class GPUARModelRunner(OmniGPUModelRunner):
                         logger.error(f"Error in merge multimodal outputs: {e}")
                 if mm_payload:
                     payload.update(mm_payload)
+            req_state = self.requests.get(rid)
+            if req_state is not None:
+                info = getattr(req_state, "additional_information_cpu", None)
+                if isinstance(info, dict):
+                    code = info.get("code")
+                    if code is not None:
+                        payload["code"] = code
             pooler_output.append(payload)
         with record_function_or_nullcontext("gpu_model_runner: ModelRunnerOutput"):
             output = OmniModelRunnerOutput(

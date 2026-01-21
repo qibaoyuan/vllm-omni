@@ -94,7 +94,6 @@ class MiMoSampler:
 
         return torch.argmax(scores, dim=-1)
 
-
 # CUDA Graph implementation for local_forward, adapted from sglang's mimo_audio
 # Based on work by yanyihan@xiaomi.com
 @dataclass
@@ -168,6 +167,8 @@ class MiMoLocalDecodeBuffer:
             f"Expected batch size <= {self.max_batch_size}, got {b}"
         )
 
+        if input_tensor.ndim != self.input_tensor.ndim:
+             input_tensor = input_tensor.reshape(self.input_tensor[:b].shape)
         self.input_tensor[:b].copy_(input_tensor)
 
         if isinstance(sampler, MiMoSampler):
@@ -234,7 +235,6 @@ class MiMoLocalDecodeCudaGraph:
             if self.output_tensor.dim() == 2:
                 return self.output_tensor.clone()
             return self.output_tensor[:b].clone()
-
 
 
 class MiMoAudioQwen2Model(TransformerQwen2Model):
@@ -622,7 +622,6 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             persistent=False,
         )
 
-        
         self.local_forward_cg: MiMoLocalDecodeCudaGraph | None = None
         self.local_forward_buf: MiMoLocalDecodeBuffer | None = None
         try:
@@ -643,7 +642,6 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             )
             self.local_forward_cg = None
             self.local_forward_buf = None
-        
 
     def _validate_and_reshape_mm_tensor(self, mm_input: object, name: str) -> torch.Tensor:
         if not isinstance(mm_input, (torch.Tensor, list)):
@@ -741,7 +739,6 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             handle_oov_mm_token=handle_oov_mm_token,
         )
 
-    
     def base_local_forward(
         self,
         local_embeds: torch.FloatTensor,  # [1, 1, hidden_size]
@@ -809,7 +806,6 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             and (local_sampler.do_sample is None or local_sampler.do_sample is False)
         )
         if use_cg:
-            # print("Using CUDA graph for local_forward")
             return self.local_forward_cg.forward(local_embeds, local_sampler)
 
         return self.base_local_forward(
@@ -818,7 +814,6 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             tokens_device=tokens_device,
             local_sampler=local_sampler,
         )
-    
 
     def _prepare_input_parameters(
         self,

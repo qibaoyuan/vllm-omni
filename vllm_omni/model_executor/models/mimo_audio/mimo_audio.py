@@ -438,6 +438,7 @@ class MiMoAudioForConditionalGeneration(
     ):
         super().__init__()
         self.has_preprocess = False
+        self.has_postprocess = False
         self.have_multimodal_outputs = True
         config = vllm_config.model_config.hf_config
         config = MiMoAudioConfig(**vars(config)) if isinstance(config, Qwen2Config) else config
@@ -464,6 +465,8 @@ class MiMoAudioForConditionalGeneration(
         if self.model_stage == "fused_thinker_talker":
             self.has_preprocess = True
             self.set_custom_preprocess(self.fused_thinker_talker_preprocess)
+            self.has_postprocess = True
+            self.set_custom_postprocess(self.fused_thinker_talker_postprocess)
             # Initialize fused_thinker_talker llm model (multimodal processing)
             self.fused_thinker_talker = init_vllm_registered_model(
                 vllm_config=vllm_config,
@@ -557,6 +560,57 @@ class MiMoAudioForConditionalGeneration(
         self, input_ids: torch.Tensor, input_embeds: torch.Tensor, **info_dict: dict
     ):
         return input_ids, input_embeds, info_dict
+
+    def fused_thinker_talker_postprocess(self, hidden_states: torch.Tensor, **info_dict: object):
+        # // AIGC START
+        # Sampling-time hook (graph-external): if the sampled text token is
+        # <|empty|>, run local audio generation to produce codec codes and
+        # update cached new_audio_emb for the next step.
+        update_dict: dict[str, object] = {}
+
+        if self.fused_thinker_talker is None:
+            return update_dict
+
+        sampled_token_id = info_dict.get("sampled_token_id", None)
+        request_id = info_dict.get("request_id", None)
+
+        sampled_token_int: int | None = None
+        try:
+            if isinstance(sampled_token_id, torch.Tensor):
+                if sampled_token_id.numel() == 1:
+                    sampled_token_int = int(sampled_token_id.item())
+            elif sampled_token_id is not None:
+                sampled_token_int = int(sampled_token_id)  # type: ignore[arg-type]
+        except Exception:
+            sampled_token_int = None
+
+        if sampled_token_int is None:
+            return update_dict
+
+        empty_token_id = int(self.fused_thinker_talker.empty_token_id)
+        if sampled_token_int != empty_token_id:
+            return update_dict
+
+        # Ensure we have a stable cache key (bs=1 first; multi-req later)
+        if not isinstance(request_id, str) or not request_id:
+            request_id = "default"
+
+        # hidden_states: [span_len, hidden] (GPU). Convert to [1, span_len, hidden]
+        try:
+            next_speech_tokens, new_audio_emb = self.fused_thinker_talker._generate_speech_tokens_and_audio_embeddings(
+                hidden_states.unsqueeze(0)
+            )
+        except Exception:
+            # If local generation fails, skip update to avoid breaking main text generation.
+            return update_dict
+
+        # Cache for next-step embedding merge (keep on GPU)
+        self.fused_thinker_talker._cached_new_audio_emb_by_req[request_id] = new_audio_emb
+
+        # Expose codec codes to output pipeline (CPU)
+        update_dict["code"] = next_speech_tokens.detach().to("cpu").contiguous()
+        return update_dict
+        # // AIGC END
 
     @staticmethod
     def _module_device(module: nn.Module) -> torch.device:
@@ -699,7 +753,7 @@ class MiMoAudioForConditionalGeneration(
         4) Return text hidden states (and audio when applicable).
         """
         if self.model_stage == "fused_thinker_talker":
-            next_speech_tokens, text_hidden_states, added_batch_dim = self.generate_codes(
+            text_hidden_states, added_batch_dim = self.generate_codes(
                 input_ids=input_ids,
                 positions=positions,
                 inputs_embeds=inputs_embeds,
@@ -709,7 +763,7 @@ class MiMoAudioForConditionalGeneration(
 
             return OmniOutput(
                 text_hidden_states=text_hidden_states.reshape(-1, text_hidden_states.shape[-1]),
-                multimodal_outputs={"code": next_speech_tokens},
+                multimodal_outputs={},
             )
 
         if self.model_stage == "code2wav":
@@ -770,16 +824,18 @@ class MiMoAudioForConditionalGeneration(
             **kwargs,
         )
 
-        next_speech_tokens = None
+        # // AIGC START
+        # fused_thinker_talker.forward 返回 (next_speech_tokens, hidden_states) tuple
+        # 需要提取 hidden_states 部分
         if isinstance(llm_output, tuple):
-            if len(llm_output) == 2:
-                next_speech_tokens, text_hidden_states = llm_output
-            elif len(llm_output) == 3:
-                ids, next_speech_tokens, text_hidden_states = llm_output
+            next_speech_tokens, text_hidden_states = llm_output
         else:
             text_hidden_states = llm_output
+        # // AIGC END
 
-        return next_speech_tokens, text_hidden_states, added_batch_dim
+        # After moving local branch to postprocess, the LLM forward returns
+        # text hidden states only.
+        return text_hidden_states, added_batch_dim
 
     def generate_audio(self, code, voice_type):
         token2wav_dev = self._module_device(self.token2wav)
