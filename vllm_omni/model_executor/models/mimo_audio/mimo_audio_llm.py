@@ -670,6 +670,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
     def embed_multimodal(self, **kwargs: object) -> MultiModalEmbeddings:
         if kwargs.get("modality_preprocess") is None:
             mm_dummy_embeddings = []
+            # TODO buggy:audio_lengths is not the same. In vllm12, audio_length=tensor([[28],[28]...],, device='cuda:0'), however in vllm0.14, it becomes int array:[28, 28, 28, 28, 28, 28, ....]
             audio_lengths = kwargs.get("audio_lengths", [])
             for audio_length in audio_lengths:
                 mm_dummy_embeddings.append(
