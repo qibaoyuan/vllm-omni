@@ -94,8 +94,7 @@ class MiMoSampler:
 
         return torch.argmax(scores, dim=-1)
 
-# CUDA Graph implementation for local_forward, adapted from sglang's mimo_audio
-# Based on work by yanyihan@xiaomi.com
+
 @dataclass
 class MiMoLocalSamplerTensor:
     temperature: torch.Tensor
@@ -235,6 +234,78 @@ class MiMoLocalDecodeCudaGraph:
             if self.output_tensor.dim() == 2:
                 return self.output_tensor.clone()
             return self.output_tensor[:b].clone()
+
+
+class MiMoInputLocalTransformerBuffer:
+    def __init__(self, model: "MiMoAudioLLMForConditionalGeneration") -> None:
+        device = next(model.input_local_transformer.parameters()).device
+        dtype = next(model.input_local_transformer.parameters()).dtype
+        hidden_size = model.input_local_config.hidden_size
+        group_size = model.group_size
+
+        self.pool = torch.cuda.graph_pool_handle()
+        self.input_tensor = torch.zeros(
+            (1, group_size, hidden_size), dtype=dtype, device=device
+        )
+        self.lock = threading.Lock()
+
+    def inputs(self) -> torch.Tensor:
+        return self.input_tensor
+
+    def prepare(self, input_tensor: torch.Tensor) -> None:
+        if input_tensor.shape != self.input_tensor.shape:
+            input_tensor = input_tensor.reshape(self.input_tensor.shape)
+        self.input_tensor.copy_(input_tensor)
+
+
+class MiMoInputLocalTransformerCudaGraph:
+    def __init__(
+        self,
+        cuda_graph: torch.cuda.CUDAGraph,
+        buffer: MiMoInputLocalTransformerBuffer,
+        output_tensor: torch.Tensor,
+    ) -> None:
+        self.cuda_graph = cuda_graph
+        self.buffer = buffer
+        self.output_tensor = output_tensor
+
+    @classmethod
+    def capture(
+        cls,
+        model: "MiMoAudioLLMForConditionalGeneration",
+        buffer: MiMoInputLocalTransformerBuffer,
+        eager_run_first: bool = True,
+    ) -> "MiMoInputLocalTransformerCudaGraph":
+        input_tensor = buffer.inputs()
+        cuda_graph = torch.cuda.CUDAGraph()
+        if eager_run_first:
+            output = model.input_local_transformer(
+                inputs_embeds=input_tensor,
+                return_dict=True,
+                is_causal=False,
+            )
+            _ = output.last_hidden_state
+        with torch.cuda.graph(cuda_graph, buffer.pool):
+            output = model.input_local_transformer(
+                inputs_embeds=input_tensor,
+                return_dict=True,
+                is_causal=False,
+            )
+            output_tensor = output.last_hidden_state
+
+        return cls(
+            cuda_graph=cuda_graph,
+            buffer=buffer,
+            output_tensor=output_tensor,
+        )
+
+    def forward(self, input_embeds: torch.Tensor) -> torch.Tensor:
+        with self.buffer.lock:
+            torch.cuda.synchronize()
+            self.buffer.prepare(input_embeds)
+            self.cuda_graph.replay()
+            torch.cuda.synchronize()
+            return self.output_tensor.clone()
 
 
 class MiMoAudioQwen2Model(TransformerQwen2Model):
@@ -643,6 +714,26 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             self.local_forward_cg = None
             self.local_forward_buf = None
 
+        self.input_local_transformer_cg: MiMoInputLocalTransformerCudaGraph | None = None
+        self.input_local_transformer_buf: MiMoInputLocalTransformerBuffer | None = None
+        try:
+            if torch.cuda.is_available():
+                self.input_local_transformer_buf = MiMoInputLocalTransformerBuffer(self)
+                self.input_local_transformer_cg = MiMoInputLocalTransformerCudaGraph.capture(
+                    self,
+                    self.input_local_transformer_buf,
+                )
+                logger.info("Captured input_local_transformer CUDA graph (batch_size=1).")
+            else:
+                logger.info("CUDA not available; skip input_local_transformer CUDA graph capture.")
+        except Exception as e:
+            logger.warning(
+                f"Failed to capture input_local_transformer CUDA graph: {e}. "
+                "Falling back to eager input_local_transformer."
+            )
+            self.input_local_transformer_cg = None
+            self.input_local_transformer_buf = None
+
     def _validate_and_reshape_mm_tensor(self, mm_input: object, name: str) -> torch.Tensor:
         if not isinstance(mm_input, (torch.Tensor, list)):
             raise ValueError(f"Incorrect type of {name}. Got type: {type(mm_input)}")
@@ -935,13 +1026,23 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
 
             new_audio_emb += cur_speech_embeds
 
-        new_audio_emb_input_lf = self.input_local_transformer(
-            inputs_embeds=new_audio_emb.squeeze(0),
-            return_dict=True,
-            is_causal=False,
-        )  # 1,1,4,1024
+        input_local_embeds = new_audio_emb.squeeze(0)
+        use_cg = (
+            self.input_local_transformer_cg is not None
+            and self.input_local_transformer_buf is not None
+            and input_local_embeds.shape == self.input_local_transformer_buf.input_tensor.shape
+        )
+        if use_cg:
+            new_audio_emb_last_hidden = self.input_local_transformer_cg.forward(input_local_embeds)
+        else:
+            new_audio_emb_input_lf = self.input_local_transformer(
+                inputs_embeds=input_local_embeds,
+                return_dict=True,
+                is_causal=False,
+            )  # 1,1,4,1024
+            new_audio_emb_last_hidden = new_audio_emb_input_lf.last_hidden_state
 
-        new_audio_emb_last = new_audio_emb_input_lf.last_hidden_state.view(1, 1, -1)
+        new_audio_emb_last = new_audio_emb_last_hidden.view(1, 1, -1)
         new_audio_emb_downcast = self.speech_group_downcast(new_audio_emb_last)[0]
         new_audio_emb = new_audio_emb_downcast.clone()
 
