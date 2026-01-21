@@ -46,7 +46,9 @@ class InputSegment:
         group_size: int,
         audio_channels: int = 8,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        if self.audio is None:  ## If no audio is provided, tokenize the text with (group_size-1) tokens inserted between each, fill with -100; and set audio to empty indices
+        if (
+            self.audio is None
+        ):  ## If no audio is provided, tokenize the text with (group_size-1) tokens inserted between each, fill with -100; and set audio to empty indices
             if self.tokenized_text is None:
                 tokenized_text = tokenizer(
                     self.text,
