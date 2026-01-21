@@ -46,7 +46,7 @@ class InputSegment:
         group_size: int,
         audio_channels: int = 8,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        if self.audio is None:  ##如果没有音频，则按照文本进行分词，并且中间隔开3个，填充-100；并且把音频设置为0
+        if self.audio is None:  ## If no audio is provided, tokenize the text with (group_size-1) tokens inserted between each, fill with -100; and set audio to empty indices
             if self.tokenized_text is None:
                 tokenized_text = tokenizer(
                     self.text,
@@ -71,7 +71,7 @@ class InputSegment:
                     (audio_channels, tokenized_text.shape[1]), self.speech_zeroemb_idx, dtype=torch.int
                 )
 
-        else:  # 如果有音频，则添加sosp的标记，并且将audio进行转化放进去：根据audio的len填充empty
+        else:  # If audio is provided, add sosp/eosp markers and convert audio: fill with empty tokens based on audio length
             sosp_token = tokenizer.convert_tokens_to_ids("<|sosp|>") if self.add_sosp_eosp else None
             eosp_token = tokenizer.convert_tokens_to_ids("<|eosp|>") if self.add_sosp_eosp else None
             audio_part = self.audio.reshape(-1, audio_channels).T  # [audio_channels, seqlen]
@@ -197,7 +197,7 @@ class StreamingInputSegment:
 
         text_segments = text_segments[:-1] + (torch.cat([text_segments[-1], eot_tokens], dim=0),)
 
-        length = min(len(text_segments), len(audio_segments))  # 这里的empty的数量不一定是多少
+        length = min(len(text_segments), len(audio_segments))  # The number of empty tokens here may vary
         for i in range(length):
             text_segment = text_segments[i]
             audio_segment = audio_segments[i]
