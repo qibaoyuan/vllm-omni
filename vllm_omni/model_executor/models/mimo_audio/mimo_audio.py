@@ -23,7 +23,6 @@ from vllm.multimodal.inputs import (
     MultiModalFieldConfig,
     MultiModalFieldElem,
     MultiModalKwargsItem,
-    MultiModalKwargsItems,
 )
 from vllm.multimodal.parse import AudioProcessorItems, MultiModalDataItems, MultiModalDataParser
 from vllm.multimodal.processing import (
@@ -315,7 +314,7 @@ class MiMoAudioLLMMultiModalProcessor(BaseMultiModalProcessor[MiMoAudioLLMProces
         self,
         mm_items: MultiModalDataItems,
         hf_processor_mm_kwargs: Mapping[str, object],
-        out_mm_kwargs: MultiModalKwargsItems,
+        out_mm_kwargs,
     ) -> Sequence[PromptUpdate]:
         # MiMoAudio doesn't use a standard HF processor like Qwen2Audio
         # Get tokenizer and vocabulary directly
