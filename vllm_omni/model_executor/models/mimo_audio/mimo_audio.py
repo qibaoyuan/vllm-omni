@@ -559,10 +559,54 @@ class MiMoAudioForConditionalGeneration(
     def fused_thinker_talker_decode_one_step(
         self, input_ids: torch.Tensor, input_embeds: torch.Tensor, **info_dict: dict
     ):
+        # Merge cached audio embeddings in preprocess (outside CUDA graph capture)
+        # to avoid Python dict state being frozen in CUDA graph
+        empty_token_id = self.fused_thinker_talker.empty_token_id
+        
+        # Check if this is an audio token (empty_token_id) that needs cached embedding
+        if (
+            input_ids is not None
+            and input_ids.numel() == 1
+            and int(input_ids.item()) == empty_token_id
+        ):
+            # Get request_id from info_dict
+            request_id = info_dict.get("request_id", None)
+            if not isinstance(request_id, str) or not request_id:
+                request_id = "default"
+            
+            # Try to get cached audio embedding
+            cached_audio_emb = self.fused_thinker_talker._cached_new_audio_emb_by_req.get(request_id)
+            
+            if cached_audio_emb is not None:
+                # Prepare kwargs for embed_multimodal (similar to _prepare_multimodal_embeddings_with_cache)
+                # In decode stage, we already checked input_ids.numel() == 1, so seq_len = 1
+                seq_len = 1
+                kwargs = {
+                    "audio_embeds": self.fused_thinker_talker._audio_embeds_buffer[:, :seq_len, :],
+                    "mimo_audio_codes_processing": False,
+                    "modality_preprocess": False,
+                }
+                
+                # Get zero-valued multimodal embeddings (as placeholder)
+                multimodal_embeddings_tuple = self.fused_thinker_talker.embed_multimodal(**kwargs)
+                
+                # Merge cached embedding (convert to tensor as _embed_input_ids expects)
+                if multimodal_embeddings_tuple and len(multimodal_embeddings_tuple) > 0:
+                    # Add cached embedding to the first (and only) multimodal embedding
+                    multimodal_embeddings = multimodal_embeddings_tuple[0] + cached_audio_emb
+                else:
+                    # If no multimodal embeddings, use cached one directly
+                    multimodal_embeddings = cached_audio_emb
+                
+                # Merge into input_embeds using _embed_input_ids
+                input_embeds = self.fused_thinker_talker._embed_input_ids(
+                    input_ids, 
+                    multimodal_embeddings=multimodal_embeddings
+                )
+        
         return input_ids, input_embeds, info_dict
 
     def fused_thinker_talker_postprocess(self, hidden_states: torch.Tensor, **info_dict: object):
-        # // AIGC START
         # Sampling-time hook (graph-external): if the sampled text token is
         # <|empty|>, run local audio generation to produce codec codes and
         # update cached new_audio_emb for the next step.
@@ -610,7 +654,6 @@ class MiMoAudioForConditionalGeneration(
         # Expose codec codes to output pipeline (CPU)
         update_dict["code"] = next_speech_tokens.detach().to("cpu").contiguous()
         return update_dict
-        # // AIGC END
 
     @staticmethod
     def _module_device(module: nn.Module) -> torch.device:

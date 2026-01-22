@@ -1056,21 +1056,12 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         inputs_embeds: torch.Tensor | None = None,
         **kwargs: object,
     ) -> torch.Tensor | IntermediateTensors:
+        # Audio embedding merging is now handled in preprocess (fused_thinker_talker_decode_one_step)
+        # to avoid Python dict state being frozen in CUDA graph capture.
+        # The inputs_embeds passed here should already have cached embeddings merged.
+        
         request_ids: list[str] | None = kwargs.get("request_ids")
         is_capturing = torch.cuda.is_current_stream_capturing()
-
-        _merge_multimodal_embedding, kwargs = self._should_merge_multimodal_embedding(
-            input_ids, inputs_embeds, is_capturing, kwargs
-        )
-
-        prev_new_audio_emb_by_req = self._load_cached_state(request_ids)
-
-        # NOTE: In v1, inputs_embeds is always generated at model runner, this
-        # condition is for v0 compatibility.
-        if _merge_multimodal_embedding:
-            inputs_embeds = self._prepare_multimodal_embeddings_with_cache(
-                input_ids, request_ids, prev_new_audio_emb_by_req, kwargs
-            )
 
         hidden_states = self.model(input_ids, positions, intermediate_tensors, inputs_embeds=inputs_embeds)
 
