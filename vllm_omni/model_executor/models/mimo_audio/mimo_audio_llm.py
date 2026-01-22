@@ -3,7 +3,7 @@ import logging
 import threading
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import torch
 import torch.nn as nn
@@ -17,7 +17,6 @@ from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader, maybe_remap_kv_scale_name
 from vllm.model_executor.models.interfaces import MultiModalEmbeddings, SupportsMultiModal, SupportsPP
 from vllm.model_executor.models.qwen2_audio import (
-    Qwen2AudioEmbeddingInputs,
     Qwen2AudioFeatureInputs,
     Qwen2AudioMultiModalDataParser,
     Qwen2AudioProcessingInfo,
@@ -51,6 +50,7 @@ from vllm.multimodal.processing import (
 )
 from vllm.multimodal.profiling import BaseDummyInputsBuilder
 from vllm.sequence import IntermediateTensors
+from vllm.utils.tensor_schema import TensorSchema
 
 from vllm_omni.model_executor.models.mimo_audio.config_mimo_audio import MiMoAudioConfig
 
@@ -239,8 +239,18 @@ class MiMoAudioQwen2Model(TransformerQwen2Model):
         return super().get_input_embeddings()(input_ids)
 
 
-class MimoAudioEmbeddingInputs(Qwen2AudioEmbeddingInputs):
-    pass
+class MimoAudioEmbeddingInputs(TensorSchema):
+    """
+    Dimensions:
+        - bn: Batch size
+        - naf: Number of audio features
+        - hs: Hidden size (must match the hidden size of language model
+          backbone)
+    """
+
+    type: Literal["audio_embeds"] = "audio_embeds"
+
+    audio_embeds: list[torch.Tensor]
 
 
 class MimoAudioProcessingInfo(Qwen2AudioProcessingInfo):
