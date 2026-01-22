@@ -703,7 +703,6 @@ class OmniGPUModelRunner(GPUModelRunner):
         model_kwargs_extra: dict[str, object] = {}
         try:
             model_kwargs_extra["runtime_additional_information"] = self._gather_runtime_additional_information()
-            model_kwargs_extra["request_ids"] = self.input_batch.req_ids  # Request_ids param is used for MiMo-Audio
         except Exception as e:
             logger.error(f"[OMNI DEBUG] Error building model_kwargs_extra: {e}")
             import traceback

@@ -363,7 +363,7 @@ def main(args):
                         f.writelines(lines)
                 except Exception as e:
                     print(f"[Warn] Failed writing text file {out_txt}: {e}")
-                print(f"Request ID: {request_id}, Text saved to {out_txt}")
+                print(f"Request ID: {request_id}, Text saved to {out_txt}\n")
         elif stage_outputs.final_output_type == "audio":
             for output in stage_outputs.request_output:
                 request_id = output.request_id

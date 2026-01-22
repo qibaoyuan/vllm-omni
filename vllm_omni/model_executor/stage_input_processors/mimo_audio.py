@@ -88,7 +88,11 @@ def llm2code2wav(
         # Extract codec codes from talker output
         # Expected shape: [8, seq_len] (8-layer RVQ codes)
         if "code" in output.multimodal_output:
-            codec_codes = output.multimodal_output["code"].to(torch.long)
+            codec_codes = output.multimodal_output["code"].to(torch.long) # [seq_batch_size, 1, 8, 4]
+            is_all_zero = (codec_codes == 0).all(dim = (1, 2, 3))
+            non_zero_indices = (~is_all_zero).nonzero(as_tuple=True)[0]
+            if len(non_zero_indices) < codec_codes.shape[0]:
+                codec_codes = codec_codes[non_zero_indices]
         else:
             raise ValueError(f"Invalid multimodal_output: {output.multimodal_output}")
 
