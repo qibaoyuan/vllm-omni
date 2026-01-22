@@ -97,7 +97,9 @@ def get_tts_sft(
 def get_audio_understanding_sft(audio_path, text="", thinking=False, use_sostm=False):
     audio_list = []
     audio_list.append(get_audio_data(audio_path))
-    res = get_audio_understanding_sft_prompt(input_speech=audio_path, input_text=text, thinking=thinking, use_sostm=use_sostm)
+    res = get_audio_understanding_sft_prompt(
+        input_speech=audio_path, input_text=text, thinking=thinking, use_sostm=use_sostm
+    )
     prompt = to_prompt(res)
     final_prompt = {
         "prompt": prompt,
