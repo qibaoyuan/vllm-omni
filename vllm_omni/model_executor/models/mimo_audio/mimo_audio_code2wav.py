@@ -396,16 +396,6 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
         )
         self.debug_echo_codes = os.environ.get("MIMO_AUDIO_ECHO_CODES", "0") not in ("0", "", "false", "False", "FALSE")
 
-    # @property
-    # def tokenizer_service(self) -> MiMoAudioTokenizerWorker:
-    #     if self._tokenizer_service is None:
-    #         self._tokenizer_service = _get_tokenizer_worker(
-    #             device=self.device,
-    #             config_path=self.tokenizer_config_path,
-    #             audio_tokenizer_path=self.audio_tokenizer_path,
-    #         )
-    #     return self._tokenizer_service
-
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]], audio__dict_path: str) -> set[str]:
         # Decoder has no trainable weights to load in this stage.
         return set()

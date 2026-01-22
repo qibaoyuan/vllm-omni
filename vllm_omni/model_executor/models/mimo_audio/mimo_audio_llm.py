@@ -51,6 +51,7 @@ from vllm.multimodal.processing import (
 from vllm.multimodal.profiling import BaseDummyInputsBuilder
 from vllm.sequence import IntermediateTensors
 from vllm.utils.tensor_schema import TensorSchema
+from vllm.forward_context import get_forward_context
 
 from vllm_omni.model_executor.models.mimo_audio.config_mimo_audio import MiMoAudioConfig
 
@@ -182,11 +183,11 @@ class MiMoLocalDecodeBuffer:
 
 class MiMoLocalDecodeCudaGraph:
     def __init__(
-        self,
-        cuda_graph: torch.cuda.CUDAGraph,
-        buffer: MiMoLocalDecodeBuffer,
-        output_tensor: torch.Tensor,
-        batch_size: int,
+            self,
+            cuda_graph: torch.cuda.CUDAGraph,
+            buffer: MiMoLocalDecodeBuffer,
+            output_tensor: torch.Tensor,
+            batch_size: int,
     ) -> None:
         self.cuda_graph = cuda_graph
         self.buffer = buffer
@@ -195,11 +196,11 @@ class MiMoLocalDecodeCudaGraph:
 
     @classmethod
     def capture(
-        cls,
-        model: "MiMoAudioLLMForConditionalGeneration",
-        buffer: MiMoLocalDecodeBuffer,
-        batch_size: int = 1,
-        eager_run_first: bool = True,
+            cls,
+            model: "MiMoAudioLLMForConditionalGeneration",
+            buffer: MiMoLocalDecodeBuffer,
+            batch_size: int = 1,
+            eager_run_first: bool = True,
     ) -> "MiMoLocalDecodeCudaGraph":
         input_tensor, sampler = buffer.inputs(batch_size)
 
@@ -275,9 +276,9 @@ class MimoAudioDummyInputsBuilder(BaseDummyInputsBuilder[MimoAudioProcessingInfo
         return audio_token * num_audios
 
     def get_dummy_mm_data(
-        self,
-        seq_len: int,
-        mm_counts: Mapping[str, int],
+            self,
+            seq_len: int,
+            mm_counts: Mapping[str, int],
     ) -> MultiModalDataDict:
         feature_extractor = self.info.get_feature_extractor()
 
@@ -294,11 +295,11 @@ class MimoAudioMultiModalProcessor(BaseMultiModalProcessor[MimoAudioProcessingIn
         return MimoAudioMultiModalDataParser(target_sr=feature_extractor.sampling_rate)
 
     def _call_hf_processor(
-        self,
-        prompt: str,
-        mm_data: Mapping[str, object],
-        mm_kwargs: Mapping[str, Any],
-        tok_kwargs: Mapping[str, object],
+            self,
+            prompt: str,
+            mm_data: Mapping[str, object],
+            mm_kwargs: Mapping[str, Any],
+            tok_kwargs: Mapping[str, object],
     ) -> BatchFeature:
         audios = mm_data.pop("audios", [])
         if audios:
@@ -324,17 +325,17 @@ class MimoAudioMultiModalProcessor(BaseMultiModalProcessor[MimoAudioProcessingIn
         )
 
     def _get_mm_fields_config(
-        self,
-        hf_inputs: BatchFeature,
-        hf_processor_mm_kwargs: Mapping[str, object],
+            self,
+            hf_inputs: BatchFeature,
+            hf_processor_mm_kwargs: Mapping[str, object],
     ) -> Mapping[str, MultiModalFieldConfig]:
         return _qwen2audio_field_config(hf_inputs)
 
     def _get_prompt_updates(
-        self,
-        mm_items: MultiModalDataItems,
-        hf_processor_mm_kwargs: Mapping[str, object],
-        out_mm_kwargs: MultiModalKwargsItems,
+            self,
+            mm_items: MultiModalDataItems,
+            hf_processor_mm_kwargs: Mapping[str, object],
+            out_mm_kwargs: MultiModalKwargsItems,
     ) -> Sequence[PromptUpdate]:
         processor = self.info.get_hf_processor(**hf_processor_mm_kwargs)
         tokenizer = self.info.get_tokenizer()
@@ -442,8 +443,8 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             architectures=["Qwen2ForCausalLM"],
         )
 
-        self.global_sampler = MiMoSampler(do_sample=False, temperature=0.6, top_k=50, top_p=0.95)
-        self.local_sampler = MiMoSampler(do_sample=False, temperature=0.9, top_k=50, top_p=0.95)
+        self.global_sampler = MiMoSampler(do_sample=False, temperature=0.6, top_p=0.95)
+        self.local_sampler = MiMoSampler(do_sample=False, temperature=0.9, top_p=0.95)
         self.removed_tokens = None
 
         self.speech_vocab_sizes = config.parsed_speech_vocab_sizes()
@@ -535,9 +536,11 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             persistent=False,
         )
         # Pre-allocate new_audio_emb buffer for processing after local_forward
+        self._max_batch_size = 100
         self.register_buffer(
             "_new_audio_emb_buffer",
-            torch.zeros((1, 1, self.group_size, self.input_local_config.hidden_size), dtype=torch.bfloat16),
+            torch.zeros((self._max_batch_size, 1, self.group_size, self.input_local_config.hidden_size),
+                        dtype=torch.bfloat16),
             persistent=False,
         )
 
@@ -619,32 +622,31 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         return audio_features
 
     def _embed_input_ids(
-        self,
-        input_ids: torch.Tensor,
-        multimodal_embeddings: MultiModalEmbeddings | None = None,
-        is_multimodal: torch.Tensor | None = None,
+            self,
+            input_ids: torch.Tensor,
+            multimodal_embeddings: MultiModalEmbeddings | None = None,
+            *,
+            is_multimodal: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        inputs_embeds = self.model.embed_input_ids(input_ids)
         if input_ids.dim() == 1:
             input_ids = input_ids.unsqueeze(0)
 
-        if len(input_ids[0]) == 1 and input_ids[0] == self.empty_token_id:
-            inputs_embeds = torch.zeros_like(inputs_embeds)
+        inputs_embeds = self.model.embed_input_ids(input_ids)
+        inputs_embeds.masked_fill_(is_multimodal.unsqueeze(-1), 0.0)
 
         if multimodal_embeddings is not None and len(multimodal_embeddings) != 0:
-            if len(input_ids[0]) == 1 and input_ids[0] == self.empty_token_id:
-                inputs_embeds = inputs_embeds + multimodal_embeddings
+            inputs_embeds = inputs_embeds + multimodal_embeddings
 
         inputs_embeds = inputs_embeds.to(torch.bfloat16)
         return inputs_embeds
 
     def embed_input_ids(
-        self,
-        input_ids: torch.Tensor,
-        multimodal_embeddings: MultiModalEmbeddings | None = None,
-        *,
-        is_multimodal: torch.Tensor | None = None,
-        handle_oov_mm_token: bool = False,
+            self,
+            input_ids: torch.Tensor,
+            multimodal_embeddings: MultiModalEmbeddings | None = None,
+            *,
+            is_multimodal: torch.Tensor | None = None,
+            handle_oov_mm_token: bool = False,
     ) -> torch.Tensor:
         # This is to satisfy the type checker for each overload
         if multimodal_embeddings is None or is_multimodal is None:
@@ -658,18 +660,19 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         )
 
     def base_local_forward(
-        self,
-        local_embeds: torch.FloatTensor,  # [1, 1, hidden_size]
-        tokens_dtype: torch.dtype = torch.int64,
-        tokens_device: torch.device = torch.device(
-            f"cuda:{torch.cuda.current_device()}" if torch.cuda.is_available() else "cpu"
-        ),
-        local_sampler: MiMoSampler | MiMoLocalSamplerTensor | None = None,
+            self,
+            local_embeds: torch.FloatTensor,  # [1, 1, hidden_size]
+            tokens_dtype: torch.dtype = torch.int64,
+            tokens_device: torch.device = torch.device(
+                f"cuda:{torch.cuda.current_device()}" if torch.cuda.is_available() else "cpu"
+            ),
+            local_sampler: MiMoSampler | MiMoLocalSamplerTensor | None = None,
     ):
+        B = local_embeds.shape[0]
         delay_iters = self.group_size + max(self.delay_pattern)
 
         local_tokens = torch.zeros(
-            (self.group_size, self.audio_channels),
+            (B, self.group_size, self.audio_channels),
             dtype=tokens_dtype,
             device=tokens_device,
         )
@@ -701,8 +704,8 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
                         [cur_empty],
                     )
 
-                    local_tokens[t - cur_start, idx] = cur_token
-                    cur_input_embed = self.speech_embeddings[idx](cur_token)
+                    local_tokens[:, t - cur_start, idx] = cur_token
+                    cur_input_embed = self.speech_embeddings[idx](cur_token.unsqueeze(1))
 
                     if self.speech_embeddings_to_local is not None:
                         cur_input_embed = self.speech_embeddings_to_local(cur_input_embed)
@@ -711,21 +714,21 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         return local_tokens  # [group_size, audio_channels]
 
     def local_forward(
-        self,
-        local_embeds: torch.FloatTensor,  # [1, 1, hidden_size]
-        tokens_dtype: torch.dtype = torch.int64,
-        tokens_device: torch.device = torch.device(
-            f"cuda:{torch.cuda.current_device()}" if torch.cuda.is_available() else "cpu"
-        ),
-        local_sampler: MiMoSampler | None = None,
+            self,
+            local_embeds: torch.FloatTensor,  # [1, 1, hidden_size]
+            tokens_dtype: torch.dtype = torch.int64,
+            tokens_device: torch.device = torch.device(
+                f"cuda:{torch.cuda.current_device()}" if torch.cuda.is_available() else "cpu"
+            ),
+            local_sampler: MiMoSampler | None = None,
     ):
         if local_sampler is None:
             local_sampler = MiMoSampler(do_sample=False, temperature=0.6, top_p=0.9)
 
         use_cg = (
-            self.local_forward_cg is not None
-            and local_embeds.shape[0] == 1
-            and (local_sampler.do_sample is None or local_sampler.do_sample is False)
+                self.local_forward_cg is not None
+                and local_embeds.shape[0] == 1
+                and (local_sampler.do_sample is None or local_sampler.do_sample is False)
         )
         if use_cg:
             print("Using CUDA graph for local_forward", "local_sampler", local_sampler)
@@ -738,51 +741,47 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             local_sampler=local_sampler,
         )
 
-    def _prepare_input_parameters(
-        self,
-        input_ids: torch.Tensor,
-        inputs_embeds: torch.Tensor | None,
-    ) -> int:
-        if input_ids is not None and torch.is_tensor(input_ids):
-            if input_ids.ndim == 1:
-                new_len = int(input_ids.shape[0])
-            else:
-                new_len = int(input_ids.shape[1])
-        else:
-            new_len = int(inputs_embeds.shape[1])
-        return new_len
-
-    def _should_merge_multimodal_embedding(
-        self,
-        input_ids: torch.Tensor,
-        inputs_embeds: torch.Tensor | None,
-        is_capturing: bool,
-        kwargs: dict,
-    ) -> tuple[bool, dict]:
-        _merge_multimodal_embedding = False
-
-        # Only for multimodal inputs audio generation processing(Input_ids=151667), inputs_embeds will be all zeros
+    def _collect_merge_mm_embedding_info(
+            self,
+            input_ids: torch.Tensor,
+            *,
+            num_reqs: int,
+            cached_req_ids: list[str] | None,
+            query_start_loc: torch.Tensor,
+            kwargs: dict,
+    ) -> tuple[dict[str, any], dict]:
+        has_merge_mm_embedding = False
+        merge_mm_embedding_info: dict[str, any] = {}
         seq_len = input_ids.shape[1] if input_ids.ndim == 2 else input_ids.shape[0]
 
-        # Determine if it is audio-only input (avoid calling .item() during capture)
-        if not is_capturing:
-            # Can safely check conditions in non-capture mode
-            if (
-                torch.is_tensor(input_ids)
-                and input_ids.view(-1).numel() == 1
-                and input_ids.view(-1)[0].item() == self.empty_token_id
-            ):
-                _merge_multimodal_embedding = True
+        if cached_req_ids is None or len(cached_req_ids) < num_reqs:
+            cached_req_ids = [str(i) for i in range(num_reqs)]
 
-        kwargs["audio_embeds"] = self._audio_embeds_buffer[:, :seq_len, :]
+        for req_idx in range(num_reqs):
+            req_id = cached_req_ids[req_idx] if req_idx < len(cached_req_ids) else str(req_idx)
+            query_start_loc_by_req = int(query_start_loc[req_idx].item())
+            query_end_loc_by_req = int(query_start_loc[req_idx + 1].item())
+            input_ids_by_req = input_ids[query_start_loc_by_req:query_end_loc_by_req]
+            seq_len_by_req = input_ids_by_req.shape[1] if input_ids_by_req.ndim == 2 else input_ids_by_req.shape[0]
+
+            if seq_len_by_req == 1 and bool(input_ids_by_req == self.empty_token_id):
+                merge_mm_embedding_info[req_id] = {
+                    "query_start_loc": query_start_loc_by_req,
+                    "query_end_loc": query_end_loc_by_req,
+                    "merge_mm_embedding": True,
+                }
+
+        has_merge_mm_embedding = len(merge_mm_embedding_info) > 0
+
+        # Only for multimodal inputs audio generation processing(Input_ids=151667), inputs_embeds will be all zeros
+        kwargs["audio_embeds"] = self._audio_embeds_buffer[:, :seq_len, :].zero_()
         kwargs["mimo_audio_codes_processing"] = False
         kwargs["modality_preprocess"] = False
 
-        return _merge_multimodal_embedding, kwargs
+        return merge_mm_embedding_info, has_merge_mm_embedding, kwargs
 
     def _load_cached_state(
-        self,
-        request_ids: list[str] | None,
+            self
     ) -> tuple[DynamicCache | None, dict[str, torch.Tensor]]:
         prev_new_audio_emb_by_req: dict[str, torch.Tensor] = {}
 
@@ -794,58 +793,55 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         return prev_new_audio_emb_by_req
 
     def _prepare_multimodal_embeddings_with_cache(
-        self,
-        input_ids: torch.Tensor,
-        request_ids: list[str] | None,
-        prev_new_audio_emb_by_req: dict[str, torch.Tensor],
-        kwargs: dict,
+            self,
+            input_ids: torch.Tensor,
+            merge_mm_embedding_info: dict[str, any],
+            prev_new_audio_emb_by_req: dict[str, torch.Tensor],
+            kwargs: dict,
     ) -> torch.Tensor:
-        # This multimodal_embeddings is zero-valued, will later retrieve previously generated audio codes embeddings
+        # This multimodal_embeddings is zero-valued and full sequence length, will later retrieve previously generated audio codes embeddings
         multimodal_embeddings = self.embed_multimodal(**kwargs)
-        # If previous new_audio_emb exists, add it to multimodal_embeddings
-        # In multi-request scenarios, need to select corresponding prev_new_audio_emb based on request_id
-        if prev_new_audio_emb_by_req:
-            # Simplified handling: if there is only one request, use that request's prev_new_audio_emb
-            # If there are multiple requests, use the first request's (or select according to actual needs)
-            if request_ids and len(request_ids) == 1:
-                req_id = request_ids[0]
-                prev_new_audio_emb = prev_new_audio_emb_by_req.get(req_id)
-            elif prev_new_audio_emb_by_req:
-                # When there are multiple requests, use the first one found (or select according to actual needs)
-                prev_new_audio_emb = next(iter(prev_new_audio_emb_by_req.values()))
-            else:
-                prev_new_audio_emb = None
-            if prev_new_audio_emb is not None:
-                # Add prev_new_audio_emb to multimodal_embeddings
-                # multimodal_embeddings is a tuple, each element is a tensor
-                if multimodal_embeddings and len(multimodal_embeddings) > 0:
-                    # Add prev_new_audio_emb as a new audio embedding to the list
-                    multimodal_embeddings = multimodal_embeddings[0] + prev_new_audio_emb
-                else:
-                    multimodal_embeddings = prev_new_audio_emb
 
-        inputs_embeds = self._embed_input_ids(input_ids, multimodal_embeddings)
+        if multimodal_embeddings is not None and len(multimodal_embeddings) > 0:
+            _mm_embeddings = multimodal_embeddings[0]  # [seq_len, hidden_size]
+        else:
+            seq_len = input_ids.shape[-1] if input_ids.dim() > 0 else len(input_ids)
+            _mm_embeddings = self._audio_embeds_buffer[0, :seq_len, :].zero_()
+
+        # If previous new_audio_emb exists for each request, add it to multimodal_embeddings
+        # In multi-request scenarios, need to select corresponding prev_new_audio_emb based on request_id
+        for req_id, info in merge_mm_embedding_info.items():
+            if info.get("merge_mm_embedding", False) and prev_new_audio_emb_by_req:
+                start_loc = info.get("query_start_loc", None)
+                end_loc = info.get("query_end_loc", None)
+
+                if (prev_new_audio_emb := prev_new_audio_emb_by_req.get(req_id)) is not None:
+                    _mm_embeddings[start_loc:end_loc] += prev_new_audio_emb  # [seq_len, hidden_size]
+
+        inputs_embeds = self._embed_input_ids(input_ids, _mm_embeddings,
+                                              is_multimodal=(input_ids == self.empty_token_id))
         return inputs_embeds
 
     def _generate_speech_tokens_and_audio_embeddings(
-        self,
-        hidden_states: torch.Tensor,
+            self,
+            hidden_states: torch.Tensor,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        B = hidden_states.shape[0]
         next_speech_tokens = None
         new_audio_emb = None
 
         # if id is empty_token_id, then will be use hs to do local forward
         hs_downsampled = self.hidden_states_downcast(hidden_states[:, -1:, :])
-
         next_speech_tokens = self.local_forward(
             local_embeds=hs_downsampled,
             local_sampler=self.local_sampler,
         )
 
         # 4,8,4096 - Use pre-allocated buffer and zero it to avoid dynamic allocation
-        new_audio_emb = self._new_audio_emb_buffer.zero_()
+        new_audio_emb = self._new_audio_emb_buffer[:B].zero_()
+        B, T_groups, group_size, hidden_size = new_audio_emb.shape
 
-        next_speech_tokens = next_speech_tokens.to(torch.int32).T.unsqueeze(0).unsqueeze(0)
+        next_speech_tokens = next_speech_tokens.to(torch.int32).transpose(1, 2).unsqueeze(1)
         for idx in range(self.audio_channels):
             cur_empty = self.speech_empty_ids[idx]
             cur_embed = self.speech_embeddings[idx]
@@ -859,83 +855,124 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             new_audio_emb += cur_speech_embeds
 
         new_audio_emb_input_lf = self.input_local_transformer(
-            inputs_embeds=new_audio_emb.squeeze(0),
+            inputs_embeds=new_audio_emb.reshape(B * T_groups, group_size, hidden_size),
             return_dict=True,
             is_causal=False,
-        )  # 1,1,4,1024
+        )  # B * T_groups, group_size, hidden_size
 
-        new_audio_emb_last = new_audio_emb_input_lf.last_hidden_state.view(1, 1, -1)
-        new_audio_emb_downcast = self.speech_group_downcast(new_audio_emb_last)[0]
+        new_audio_emb_last = new_audio_emb_input_lf.last_hidden_state.reshape(B, T_groups, group_size, hidden_size)
+        new_audio_emb_downcast = self.speech_group_downcast(new_audio_emb_last.view(B, T_groups, -1))
         new_audio_emb = new_audio_emb_downcast.clone()
 
         return next_speech_tokens, new_audio_emb
 
     def forward(
-        self,
-        input_ids: torch.Tensor,
-        positions: torch.Tensor,
-        intermediate_tensors: IntermediateTensors | None = None,
-        inputs_embeds: torch.Tensor | None = None,
-        **kwargs: object,
+            self,
+            input_ids: torch.Tensor,
+            positions: torch.Tensor,
+            intermediate_tensors: IntermediateTensors | None = None,
+            inputs_embeds: torch.Tensor | None = None,
+            **kwargs: object,
     ) -> torch.Tensor | IntermediateTensors:
-        request_ids: list[str] | None = kwargs.get("request_ids")
+        # request_ids: list[str] | None = kwargs.get("request_ids")
+        _forward_context = get_forward_context()
+        _default_query_start_loc = torch.tensor([0, input_ids.shape[-1]], device=input_ids.device)
+        query_start_loc = next(iter(
+            _forward_context.attn_metadata.values())).query_start_loc if _forward_context.attn_metadata is not None else _default_query_start_loc
+        request_ids: list[str] = [str(i) for i in
+                                  range(len(query_start_loc[1:]))] if query_start_loc is not None else []
+        num_reqs = len(request_ids)
         is_capturing = torch.cuda.is_current_stream_capturing()
 
-        _merge_multimodal_embedding, kwargs = self._should_merge_multimodal_embedding(
-            input_ids, inputs_embeds, is_capturing, kwargs
+        cached_req_ids = None
+        if hasattr(self, "_cached_new_audio_emb_by_req") and self._cached_new_audio_emb_by_req:
+            cached_req_ids = sorted(
+                self._cached_new_audio_emb_by_req.keys(),
+                key=lambda x: int(x) if x.isdigit() else float('inf')
+            )
+            # Only take the last num_reqs requests, considering the requests that have been completed
+            if len(cached_req_ids) >= num_reqs:
+                cached_req_ids = cached_req_ids[-num_reqs:]
+            else:
+                # If the number of cached requests is less than the number of requests, start from 0 in default
+                cached_req_ids = None
+
+        merge_mm_embedding_info, has_merge_mm_embedding, kwargs = self._collect_merge_mm_embedding_info(
+            input_ids[0],
+            num_reqs=num_reqs,
+            cached_req_ids=cached_req_ids,
+            query_start_loc=query_start_loc,
+            kwargs=kwargs
         )
 
-        prev_new_audio_emb_by_req = self._load_cached_state(request_ids)
+        prev_new_audio_emb_by_req = self._load_cached_state()
 
         # NOTE: In v1, inputs_embeds is always generated at model runner, this
         # condition is for v0 compatibility.
-        if _merge_multimodal_embedding:
+        if has_merge_mm_embedding:
             inputs_embeds = self._prepare_multimodal_embeddings_with_cache(
-                input_ids, request_ids, prev_new_audio_emb_by_req, kwargs
+                input_ids, merge_mm_embedding_info, prev_new_audio_emb_by_req, kwargs
             )
 
-        hidden_states = self.model(input_ids, positions, intermediate_tensors, inputs_embeds=inputs_embeds)
+        hidden_states = self.model(
+            input_ids,
+            positions,
+            intermediate_tensors,
+            inputs_embeds=inputs_embeds
+        )
 
         logits = self.compute_logits(hidden_states)
-        next_ids = self.global_sampler.sample(logits[-1:, :], removed_tokens=self.removed_tokens)
+        logits_indices = query_start_loc[1:] - 1
+        next_ids = self.global_sampler.sample(logits[logits_indices], removed_tokens=self.removed_tokens)
 
-        new_audio_emb = None
-        next_speech_tokens = None
+        new_audio_emb_by_req: dict[str, torch.Tensor] = {}
+        batch_next_speech_tokens: torch.Tensor | None = None
 
-        # Skip this conditional branch during CUDA graph capture, as int(next_ids[0]) will trigger GPU-CPU sync
-        should_do_local_forward = False
-        if not is_capturing and next_ids is not None and len(next_ids) == 1 and int(next_ids[0]) == self.empty_token_id:
-            should_do_local_forward = True
+        if not is_capturing and next_ids is not None and num_reqs > 0:
+            if (next_ids == self.empty_token_id).any():
+                batch_hs_list = []
+                valid_mask = []
 
-        if should_do_local_forward:
-            next_speech_tokens, new_audio_emb = self._generate_speech_tokens_and_audio_embeddings(
-                hidden_states.unsqueeze(0)
-            )
+                for req_idx in range(num_reqs):
+                    start = int(query_start_loc[req_idx].item())
+                    end = int(query_start_loc[req_idx + 1].item())
+                    hs_req = hidden_states[start:end][-1:, :]
+                    is_empty = bool(next_ids[req_idx] == self.empty_token_id)
+                    valid_mask.append(is_empty)
 
-        self._update_request_caches(request_ids, new_audio_emb)
+                    if not is_empty:
+                        hs_req = torch.zeros_like(hs_req)
+                    batch_hs_list.append(hs_req)
 
-        return next_speech_tokens, hidden_states
+                batch_hs = torch.stack(batch_hs_list, dim=0)
+                batch_next_speech_tokens, batch_new_audio_emb = (
+                    self._generate_speech_tokens_and_audio_embeddings(batch_hs)
+                )
+
+                for req_idx, is_valid in enumerate(valid_mask):
+                    if is_valid:
+                        req_id = request_ids[req_idx] if request_ids is not None else str(req_idx)
+                        if batch_new_audio_emb is not None:
+                            new_audio_emb_by_req[req_id] = batch_new_audio_emb[req_idx]
+                    else:
+                        batch_next_speech_tokens[req_idx] = torch.zeros_like(batch_next_speech_tokens[req_idx])
+
+        self._update_request_caches(request_ids, new_audio_emb_by_req)
+
+        return batch_next_speech_tokens, hidden_states
 
     def _update_request_caches(
-        self,
-        request_ids: list[str] | None,
-        new_audio_emb: torch.Tensor | None,
+            self,
+            request_ids: list[str] | None,
+            new_audio_emb_by_req: dict[str, torch.Tensor] | None,
     ) -> None:
-        # If new_audio_emb is generated, need to store it for next round use
+        # If new_audio_emb_by_req is generated, need to store it for next round use
         # In multi-request scenarios, need to store each request's new_audio_emb based on request_id
-        if new_audio_emb is not None:
-            # Determine current request's request_id
-            # If there is only one request, use that request's request_id
-            # If there are multiple requests, need to determine based on actual situation (simplified handling here)
-            if request_ids and len(request_ids) == 1:
-                req_id = request_ids[0]
-                self._cached_new_audio_emb_by_req[req_id] = new_audio_emb
-
-            elif request_ids and len(request_ids) > 1:
-                # TODO: Determine correspondence between new_audio_emb and request_id based on actual needs
-                req_id = request_ids[0]
-                self._cached_new_audio_emb_by_req[req_id] = new_audio_emb
-
+        if new_audio_emb_by_req is not None:
+            if request_ids:
+                for req_id in request_ids:
+                    if req_id in new_audio_emb_by_req:
+                        self._cached_new_audio_emb_by_req[req_id] = new_audio_emb_by_req[req_id]
             else:
                 # Case without request_ids (backward compatibility)
                 # Use default key or first available key
@@ -943,11 +980,11 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
                     default_key = "default"
                 else:
                     default_key = next(iter(self._cached_new_audio_emb_by_req.keys()))
-                self._cached_new_audio_emb_by_req[default_key] = new_audio_emb
+                self._cached_new_audio_emb_by_req[default_key] = next(iter(new_audio_emb_by_req.values()))
 
     def compute_logits(
-        self,
-        hidden_states: torch.Tensor,
+            self,
+            hidden_states: torch.Tensor,
     ) -> torch.Tensor | None:
         if hidden_states.ndim == 2:
             text_logits: torch.Tensor = self.lm_head(hidden_states)
@@ -1034,9 +1071,9 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         return encoded_embeddings.reshape(B, T_groups, group_size, hidden_size)
 
     def _prepare_input_audio_embeds(
-        self,
-        audio_input: MimoAudioInputs,  # [B, audio_channels + 1, new_T]
-        **kwargs: Any,
+            self,
+            audio_input: MimoAudioInputs,  # [B, audio_channels + 1, new_T]
+            **kwargs: Any,
     ) -> torch.Tensor | tuple[torch.Tensor, ...]:
         prompt_ids = kwargs.get("prompt_ids", None)
         _is_first_audio_codes = False if prompt_ids is None else True
@@ -1044,9 +1081,9 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         if audio_input["type"] == "audio_embeds":
             audio_embeds = audio_input["audio_embeds"]
         if (
-            not kwargs.get("mimo_audio_codes_processing")
-            or (isinstance(audio_embeds, torch.Tensor) and audio_embeds.shape[0] > 1)
-            or not _is_first_audio_codes
+                not kwargs.get("mimo_audio_codes_processing")
+                or (isinstance(audio_embeds, torch.Tensor) and audio_embeds.shape[0] > 1)
+                or not _is_first_audio_codes
         ):
             return tuple([audio_embeds])
 
@@ -1164,10 +1201,10 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         return tuple(audio_embeds_list)
 
     def _expand_ids_4x_pad_and_nonpad(
-        self,
-        prompt_ids: torch.Tensor,
-        empty_token_id: int,
-        ignore_id: int = -100,
+            self,
+            prompt_ids: torch.Tensor,
+            empty_token_id: int,
+            ignore_id: int = -100,
     ) -> torch.Tensor:
         device = prompt_ids.device
         dtype = prompt_ids.dtype
@@ -1185,12 +1222,12 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         return expanded
 
     def _overlay_audio_codes_by_prompt_pad_positions(
-        self,
-        speech_input_ids: torch.Tensor,  # [B, C, L]
-        prompt_ids_expand: torch.Tensor,  # [L]  (L == speech_input_ids.shape[-1])
-        audio_codes_list: list[torch.Tensor],  # each [B, C, T_i]
-        mm_offset_groups: torch.Tensor | None = None,
-        device: torch.device = None,
+            self,
+            speech_input_ids: torch.Tensor,  # [B, C, L]
+            prompt_ids_expand: torch.Tensor,  # [L]  (L == speech_input_ids.shape[-1])
+            audio_codes_list: list[torch.Tensor],  # each [B, C, T_i]
+            mm_offset_groups: torch.Tensor | None = None,
+            device: torch.device = None,
     ) -> torch.Tensor:
         B, C, L = speech_input_ids.shape
         assert prompt_ids_expand.numel() == L, (
@@ -1229,11 +1266,11 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         return speech_input_ids
 
     def _split_grouped_embeds_by_speech_flag(
-        self,
-        speech_grouped_embeds: torch.Tensor,
-        is_speech_1d: torch.Tensor,
-        seg_lengths: list[int],
-        device: torch.device = None,
+            self,
+            speech_grouped_embeds: torch.Tensor,
+            is_speech_1d: torch.Tensor,
+            seg_lengths: list[int],
+            device: torch.device = None,
     ) -> list[torch.Tensor]:
         assert speech_grouped_embeds.dim() == 3, f"expect [B,T,H], got {speech_grouped_embeds.shape}"
         B, T_groups, H = speech_grouped_embeds.shape
