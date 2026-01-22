@@ -14,7 +14,7 @@ from .quantization import ResidualVectorQuantizer
 
 is_flash_atth_available = False
 try:
-    from flash_attn import flash_attn_varlen_func
+    from vllm.vllm_flash_attn import flash_attn_varlen_func
 
     is_flash_atth_available = True
 except Exception:

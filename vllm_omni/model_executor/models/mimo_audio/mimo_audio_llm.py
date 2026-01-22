@@ -1,9 +1,9 @@
 # Copyright 2025 Xiaomi Corporation.
-"""Inference-only Qwen2-Audio model compatible with HuggingFace weights."""
-
+import logging
+import threading
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 import torch
 import torch.nn as nn
@@ -11,13 +11,21 @@ from transformers import BatchFeature, DynamicCache, Qwen2Config
 from transformers.models.qwen2.modeling_qwen2 import (
     Qwen2Model as TransformerQwen2Model,
 )
-from transformers.models.qwen2_audio import Qwen2AudioConfig, Qwen2AudioProcessor
-from transformers.models.whisper import WhisperFeatureExtractor
 from vllm.config import VllmConfig
 from vllm.model_executor.layers.linear import ColumnParallelLinear
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader, maybe_remap_kv_scale_name
 from vllm.model_executor.models.interfaces import MultiModalEmbeddings, SupportsMultiModal, SupportsPP
+from vllm.model_executor.models.qwen2_audio import (
+    Qwen2AudioFeatureInputs,
+    Qwen2AudioMultiModalDataParser,
+    Qwen2AudioProcessingInfo,
+    _get_feat_extract_output_lengths,
+    _qwen2audio_field_config,
+)
+from vllm.model_executor.models.qwen2_audio import (
+    Qwen2AudioInputs as MimoAudioInputs,
+)
 from vllm.model_executor.models.utils import (
     init_vllm_registered_model,
     is_pp_missing_parameter,
@@ -25,32 +33,29 @@ from vllm.model_executor.models.utils import (
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.multimodal.inputs import (
-    AudioItem,
-    ModalityData,
     MultiModalDataDict,
     MultiModalFieldConfig,
     MultiModalKwargsItems,
 )
 from vllm.multimodal.parse import (
     AudioProcessorItems,
-    DictEmbeddingItems,
-    ModalityDataItems,
     MultiModalDataItems,
     MultiModalDataParser,
 )
 from vllm.multimodal.processing import (
     BaseMultiModalProcessor,
-    BaseProcessingInfo,
     PromptReplacement,
     PromptUpdate,
     PromptUpdateDetails,
 )
 from vllm.multimodal.profiling import BaseDummyInputsBuilder
 from vllm.sequence import IntermediateTensors
-from vllm.utils.tensor_schema import TensorSchema, TensorShape
+from vllm.utils.tensor_schema import TensorSchema
 from vllm.forward_context import get_forward_context
 
 from vllm_omni.model_executor.models.mimo_audio.config_mimo_audio import MiMoAudioConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -92,6 +97,141 @@ class MiMoSampler:
         return torch.argmax(scores, dim=-1)
 
 
+# CUDA Graph implementation for local_forward, adapted from sglang's mimo_audio
+# Based on work by yanyihan@xiaomi.com
+@dataclass
+class MiMoLocalSamplerTensor:
+    temperature: torch.Tensor
+    top_k: torch.Tensor
+    top_p: torch.Tensor
+
+    def process(self, scores: torch.Tensor) -> torch.Tensor:
+        if self.temperature is not None:
+            scores = scores / self.temperature[:, None]
+
+        if self.top_k is not None:
+            _, sorted_indices = torch.sort(scores, descending=True)
+            ranks = torch.arange(scores.size(-1), device=scores.device)
+            ranks = ranks[None, :].expand_as(sorted_indices)
+            sorted_indices_to_remove = (self.top_k[:, None] > 0) & (ranks >= self.top_k[:, None])
+            indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
+            scores = scores.masked_fill(indices_to_remove, float("-inf"))
+
+        if self.top_p is not None:
+            sorted_logits, sorted_indices = torch.sort(scores)
+            cumulative_probs = sorted_logits.softmax(dim=-1).cumsum(dim=-1)
+            sorted_indices_to_remove = cumulative_probs <= torch.sub(1, self.top_p[:, None])
+            sorted_indices_to_remove[:, -1] = 0
+            indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
+            scores = scores.masked_fill(indices_to_remove, float("-inf"))
+
+        return scores
+
+    def sample(self, scores: torch.Tensor, removed_tokens: list[int] | None = None) -> torch.Tensor:
+        if removed_tokens is not None and len(removed_tokens) > 0:
+            scores = scores.clone()
+            for t in removed_tokens:
+                scores[:, t] = float("-inf")
+
+        scores = self.process(scores)
+        return torch.argmax(scores, dim=-1)
+
+
+class MiMoLocalDecodeBuffer:
+    def __init__(self, model: "MiMoAudioLLMForConditionalGeneration", max_batch_size: int):
+        self.max_batch_size = max_batch_size
+
+        device = next(model.hidden_states_downcast.parameters()).device
+        dtype = next(model.hidden_states_downcast.parameters()).dtype
+        hidden_size = model.local_config.hidden_size
+
+        self.pool = torch.cuda.graph_pool_handle()
+        self.input_tensor = torch.zeros((max_batch_size, 1, hidden_size), dtype=dtype, device=device)
+        self.sampler = MiMoLocalSamplerTensor(
+            temperature=torch.ones(max_batch_size, dtype=torch.float32, device=device),
+            top_k=torch.full((max_batch_size,), -1, dtype=torch.int64, device=device),
+            top_p=torch.ones(max_batch_size, dtype=torch.float32, device=device),
+        )
+        self.lock = threading.Lock()
+
+    def inputs(self, batch_size: int = 1):
+        sampler = MiMoLocalSamplerTensor(
+            temperature=self.sampler.temperature[:batch_size],
+            top_k=self.sampler.top_k[:batch_size],
+            top_p=self.sampler.top_p[:batch_size],
+        )
+        return self.input_tensor[:batch_size], sampler
+
+    def prepare(self, input_tensor: torch.Tensor, sampler: MiMoSampler | MiMoLocalSamplerTensor):
+        b = input_tensor.shape[0]
+        assert b <= self.max_batch_size, f"Expected batch size <= {self.max_batch_size}, got {b}"
+
+        self.input_tensor[:b].copy_(input_tensor)
+
+        if isinstance(sampler, MiMoSampler):
+            temperature = 1.0 if sampler.temperature is None else float(sampler.temperature)
+            top_k = -1 if sampler.top_k is None else int(sampler.top_k)
+            top_p = 1.0 if sampler.top_p is None else float(sampler.top_p)
+            self.sampler.temperature[:b].fill_(temperature)
+            self.sampler.top_k[:b].fill_(top_k)
+            self.sampler.top_p[:b].fill_(top_p)
+        else:
+            self.sampler.temperature[:b].copy_(sampler.temperature)
+            self.sampler.top_k[:b].copy_(sampler.top_k)
+            self.sampler.top_p[:b].copy_(sampler.top_p)
+
+
+class MiMoLocalDecodeCudaGraph:
+    def __init__(
+        self,
+        cuda_graph: torch.cuda.CUDAGraph,
+        buffer: MiMoLocalDecodeBuffer,
+        output_tensor: torch.Tensor,
+        batch_size: int,
+    ) -> None:
+        self.cuda_graph = cuda_graph
+        self.buffer = buffer
+        self.output_tensor = output_tensor
+        self.batch_size = batch_size
+
+    @classmethod
+    def capture(
+        cls,
+        model: "MiMoAudioLLMForConditionalGeneration",
+        buffer: MiMoLocalDecodeBuffer,
+        batch_size: int = 1,
+        eager_run_first: bool = True,
+    ) -> "MiMoLocalDecodeCudaGraph":
+        input_tensor, sampler = buffer.inputs(batch_size)
+
+        cuda_graph = torch.cuda.CUDAGraph()
+        if eager_run_first:
+            model.base_local_forward(input_tensor, local_sampler=sampler)
+        with torch.cuda.graph(cuda_graph, buffer.pool):
+            output_tensor = model.base_local_forward(input_tensor, local_sampler=sampler)
+
+        return cls(
+            cuda_graph=cuda_graph,
+            buffer=buffer,
+            output_tensor=output_tensor,
+            batch_size=batch_size,
+        )
+
+    def forward(self, local_embeds: torch.Tensor, local_sampler: MiMoSampler | MiMoLocalSamplerTensor) -> torch.Tensor:
+        b = local_embeds.shape[0]
+        assert b <= self.batch_size, f"Expected batch size <= {self.batch_size}, got {b}"
+        with self.buffer.lock:
+            torch.cuda.synchronize()
+            self.buffer.prepare(local_embeds, local_sampler)
+
+            self.cuda_graph.replay()
+
+            torch.cuda.synchronize()
+            if self.output_tensor.dim() == 2:
+                return self.output_tensor.clone()
+            return self.output_tensor[:b].clone()
+
+
 class MiMoAudioQwen2Model(TransformerQwen2Model):
     def __init__(self, config: Qwen2Config):
         super().__init__(config)
@@ -100,27 +240,7 @@ class MiMoAudioQwen2Model(TransformerQwen2Model):
         return super().get_input_embeddings()(input_ids)
 
 
-# # === Audio Inputs === #
-class Qwen2AudioFeatureInputs(TensorSchema):
-    """
-    Dimensions:
-        - na: Number of audios
-        - nmb: Number of mel bins
-    """
-
-    type: Literal["audio_features"]
-    input_features: Annotated[
-        torch.Tensor | list[torch.Tensor],
-        TensorShape("na", "nmb", 3000),
-    ]
-
-    feature_attention_mask: Annotated[
-        torch.Tensor,
-        TensorShape("na", 3000),
-    ]
-
-
-class Qwen2AudioEmbeddingInputs(TensorSchema):
+class MimoAudioEmbeddingInputs(TensorSchema):
     """
     Dimensions:
         - bn: Batch size
@@ -134,47 +254,19 @@ class Qwen2AudioEmbeddingInputs(TensorSchema):
     audio_embeds: list[torch.Tensor]
 
 
-Qwen2AudioInputs = Qwen2AudioFeatureInputs | Qwen2AudioEmbeddingInputs
+class MimoAudioProcessingInfo(Qwen2AudioProcessingInfo):
+    pass
 
 
-# === Audio Encoder === #
+class MimoAudioMultiModalDataParser(Qwen2AudioMultiModalDataParser):
+    pass
 
 
-class Qwen2AudioMultiModalProjector(nn.Module):
-    def __init__(self, audio_hidden_size: int, text_hidden_size: int):
-        super().__init__()
-        self.linear = nn.Linear(audio_hidden_size, text_hidden_size, bias=True)
-
-    def forward(self, audio_features):
-        hidden_states = self.linear(audio_features)
-        return hidden_states
+class MimoAudioFeatureInputs(Qwen2AudioFeatureInputs):
+    pass
 
 
-# From Qwen2AudioEncoder._get_feat_extract_output_lengths
-def _get_feat_extract_output_lengths(input_lengths: torch.Tensor):
-    feat_lengths = (input_lengths - 1) // 2 + 1
-    output_lengths = (feat_lengths - 2) // 2 + 1
-    return feat_lengths, output_lengths
-
-
-class Qwen2AudioProcessingInfo(BaseProcessingInfo):
-    def get_hf_config(self):
-        return self.ctx.get_hf_config(Qwen2AudioConfig)
-
-    def get_hf_processor(self, **kwargs: object) -> Qwen2AudioProcessor:
-        return self.ctx.get_hf_processor(Qwen2AudioProcessor, **kwargs)
-
-    def get_feature_extractor(self, **kwargs: object) -> WhisperFeatureExtractor:
-        hf_processor = self.get_hf_processor(**kwargs)
-        feature_extractor = hf_processor.feature_extractor  # type: ignore
-        assert isinstance(feature_extractor, WhisperFeatureExtractor)
-        return feature_extractor
-
-    def get_supported_mm_limits(self) -> Mapping[str, int | None]:
-        return {"audio": None}
-
-
-class Qwen2AudioDummyInputsBuilder(BaseDummyInputsBuilder[Qwen2AudioProcessingInfo]):
+class MimoAudioDummyInputsBuilder(BaseDummyInputsBuilder[MimoAudioProcessingInfo]):
     def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:
         num_audios = mm_counts.get("audio", 0)
 
@@ -197,34 +289,10 @@ class Qwen2AudioDummyInputsBuilder(BaseDummyInputsBuilder[Qwen2AudioProcessingIn
         return {"audio": self._get_dummy_audios(length=audio_len, num_audios=num_audios)}
 
 
-def _qwen2audio_field_config(hf_inputs: Mapping[str, torch.Tensor]):
-    return dict(
-        audio_embeds=MultiModalFieldConfig.batched("audio"),
-        input_features=MultiModalFieldConfig.batched("audio"),
-        feature_attention_mask=MultiModalFieldConfig.batched("audio"),
-    )
-
-
-class Qwen2AudioMultiModalDataParser(MultiModalDataParser):
-    def _parse_audio_data(
-        self,
-        data: dict[str, torch.Tensor] | ModalityData[AudioItem],
-    ) -> ModalityDataItems[Any, Any] | None:
-        if isinstance(data, dict):
-            return DictEmbeddingItems(
-                data,
-                modality="audio",
-                required_fields={"audio_embeds"},
-                fields_factory=_qwen2audio_field_config,
-            )
-
-        return super()._parse_audio_data(data)
-
-
-class Qwen2AudioMultiModalProcessor(BaseMultiModalProcessor[Qwen2AudioProcessingInfo]):
+class MimoAudioMultiModalProcessor(BaseMultiModalProcessor[MimoAudioProcessingInfo]):
     def _get_data_parser(self) -> MultiModalDataParser:
         feature_extractor = self.info.get_feature_extractor()
-        return Qwen2AudioMultiModalDataParser(target_sr=feature_extractor.sampling_rate)
+        return MimoAudioMultiModalDataParser(target_sr=feature_extractor.sampling_rate)
 
     def _call_hf_processor(
         self,
@@ -233,9 +301,6 @@ class Qwen2AudioMultiModalProcessor(BaseMultiModalProcessor[Qwen2AudioProcessing
         mm_kwargs: Mapping[str, Any],
         tok_kwargs: Mapping[str, object],
     ) -> BatchFeature:
-        # NOTE - we rename audios -> audio in mm data because transformers has
-        # deprecated audios for the qwen2audio processor and will remove
-        # support for it in transformers 4.54.
         audios = mm_data.pop("audios", [])
         if audios:
             mm_data["audio"] = audios
@@ -295,7 +360,7 @@ class Qwen2AudioMultiModalProcessor(BaseMultiModalProcessor[Qwen2AudioProcessing
 
             audio_output_lengths = audio_output_lens.tolist()
 
-        def get_replacement_qwen2_audio(item_idx: int):
+        def get_replacement_mimo_audio(item_idx: int):
             if audio_output_lengths:
                 num_features = audio_output_lengths[item_idx]
             else:
@@ -320,13 +385,13 @@ class Qwen2AudioMultiModalProcessor(BaseMultiModalProcessor[Qwen2AudioProcessing
             PromptReplacement(
                 modality="audio",
                 target=audio_token,
-                replacement=get_replacement_qwen2_audio,
+                replacement=get_replacement_mimo_audio,
             )
         ]
 
 
 @MULTIMODAL_REGISTRY.register_processor(
-    Qwen2AudioMultiModalProcessor, info=Qwen2AudioProcessingInfo, dummy_inputs=Qwen2AudioDummyInputsBuilder
+    MimoAudioMultiModalProcessor, info=MimoAudioProcessingInfo, dummy_inputs=MimoAudioDummyInputsBuilder
 )
 class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, SupportsPP):
     @classmethod
@@ -478,6 +543,24 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             persistent=False,
         )
 
+        self.local_forward_cg: MiMoLocalDecodeCudaGraph | None = None
+        self.local_forward_buf: MiMoLocalDecodeBuffer | None = None
+        try:
+            if False:  # torch.cuda.is_available():
+                self.local_forward_buf = MiMoLocalDecodeBuffer(self, max_batch_size=1)
+                self.local_forward_cg = MiMoLocalDecodeCudaGraph.capture(
+                    self,
+                    self.local_forward_buf,
+                    batch_size=1,
+                )
+                logger.info("Captured local_forward CUDA graph (batch_size=1).")
+            else:
+                logger.info("CUDA not available; skip local_forward CUDA graph capture.")
+        except Exception as e:
+            logger.warning(f"Failed to capture local_forward CUDA graph: {e}. Falling back to eager local_forward.")
+            self.local_forward_cg = None
+            self.local_forward_buf = None
+
     def _validate_and_reshape_mm_tensor(self, mm_input: object, name: str) -> torch.Tensor:
         if not isinstance(mm_input, (torch.Tensor, list)):
             raise ValueError(f"Incorrect type of {name}. Got type: {type(mm_input)}")
@@ -487,7 +570,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             return mm_input
             # return torch.concat(mm_input)
 
-    def _parse_and_validate_audio_input(self, **kwargs: object) -> Qwen2AudioInputs | None:
+    def _parse_and_validate_audio_input(self, **kwargs: object) -> MimoAudioInputs | None:
         input_features = kwargs.pop("input_features", None)
         audio_embeds = kwargs.pop("audio_embeds", None)
         feature_attention_mask = kwargs.pop("feature_attention_mask", None)
@@ -499,11 +582,11 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             if not isinstance(audio_embeds, (torch.Tensor, list)):
                 raise ValueError(f"Incorrect type of audio embeds. Got type: {type(audio_embeds)}")
             audio_embeds = self._validate_and_reshape_mm_tensor(audio_embeds, "audio_embeds")
-            return Qwen2AudioEmbeddingInputs(type="audio_embeds", audio_embeds=audio_embeds)
+            return MimoAudioEmbeddingInputs(type="audio_embeds", audio_embeds=audio_embeds)
 
         if input_features is not None:
             input_features = self._validate_and_reshape_mm_tensor(input_features, "input_features")
-            return Qwen2AudioFeatureInputs(
+            return MimoAudioFeatureInputs(
                 type="audio_features", input_features=input_features, feature_attention_mask=feature_attention_mask
             )
 
@@ -515,6 +598,8 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
     def embed_multimodal(self, **kwargs: object) -> MultiModalEmbeddings:
         if kwargs.get("modality_preprocess") is None:
             mm_dummy_embeddings = []
+            # TODO: audio_lengths is not the same. In vllm12, audio_length=tensor([[28],[28]...], device='cuda:0'),
+            #  however, in vllm0.14, it becomes int array:[28, 28, 28, 28, 28, 28, ....]
             audio_lengths = kwargs.get("audio_lengths", [])
             for audio_length in audio_lengths:
                 mm_dummy_embeddings.append(
@@ -573,12 +658,14 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             handle_oov_mm_token=handle_oov_mm_token,
         )
 
-    def local_forward(
+    def base_local_forward(
         self,
-        local_embeds: torch.FloatTensor,  # [  1, hidden_size]
+        local_embeds: torch.FloatTensor,  # [1, 1, hidden_size]
         tokens_dtype: torch.dtype = torch.int64,
-        tokens_device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-        local_sampler: MiMoSampler | None = None,
+        tokens_device: torch.device = torch.device(
+            f"cuda:{torch.cuda.current_device()}" if torch.cuda.is_available() else "cpu"
+        ),
+        local_sampler: MiMoSampler | MiMoLocalSamplerTensor | None = None,
     ):
         B = local_embeds.shape[0]
         delay_iters = self.group_size + max(self.delay_pattern)
@@ -593,7 +680,6 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
 
         past_key_values = DynamicCache()
         for t in range(delay_iters):
-            # (1, 1, 4096)
             output = self.local_transformer(
                 inputs_embeds=local_embeds,
                 past_key_values=past_key_values,
@@ -604,15 +690,14 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             past_key_values = output.past_key_values
 
             local_embeds = torch.zeros_like(local_embeds)
-            for idx in range(self.audio_channels):  # 8
+            for idx in range(self.audio_channels):
                 cur_start = self.delay_pattern[idx]
                 cur_end = cur_start + self.group_size
                 cur_empty = self.speech_empty_ids[idx]
                 if cur_start <= t < cur_end:
                     cur_lm_head = self.local_transformer_lm_heads[idx]
-                    cur_scores: torch.Tensor = cur_lm_head(hidden_state)[:, -1, :]  # （1，1025）
+                    cur_scores: torch.Tensor = cur_lm_head(hidden_state)[:, -1, :]
 
-                    # [ vocab_size]
                     cur_token = local_sampler.sample(
                         cur_scores,
                         [cur_empty],
@@ -625,7 +710,35 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
                         cur_input_embed = self.speech_embeddings_to_local(cur_input_embed)
                     local_embeds += cur_input_embed
 
-        return local_tokens  # [B, group_size, audio_channels]
+        return local_tokens  # [group_size, audio_channels]
+
+    def local_forward(
+        self,
+        local_embeds: torch.FloatTensor,  # [1, 1, hidden_size]
+        tokens_dtype: torch.dtype = torch.int64,
+        tokens_device: torch.device = torch.device(
+            f"cuda:{torch.cuda.current_device()}" if torch.cuda.is_available() else "cpu"
+        ),
+        local_sampler: MiMoSampler | None = None,
+    ):
+        if local_sampler is None:
+            local_sampler = MiMoSampler(do_sample=False, temperature=0.6, top_p=0.9)
+
+        use_cg = (
+            self.local_forward_cg is not None
+            and local_embeds.shape[0] == 1
+            and (local_sampler.do_sample is None or local_sampler.do_sample is False)
+        )
+        if use_cg:
+            print("Using CUDA graph for local_forward", "local_sampler", local_sampler)
+            return self.local_forward_cg.forward(local_embeds, local_sampler)
+
+        return self.base_local_forward(
+            local_embeds=local_embeds,
+            tokens_dtype=tokens_dtype,
+            tokens_device=tokens_device,
+            local_sampler=local_sampler,
+        )
 
     def _collect_merge_mm_embedding_info(
         self,
@@ -956,7 +1069,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
 
     def _prepare_input_audio_embeds(
         self,
-        audio_input: Qwen2AudioInputs,  # [B, audio_channels + 1, new_T]
+        audio_input: MimoAudioInputs,  # [B, audio_channels + 1, new_T]
         **kwargs: Any,
     ) -> torch.Tensor | tuple[torch.Tensor, ...]:
         prompt_ids = kwargs.get("prompt_ids", None)
