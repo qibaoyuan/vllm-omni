@@ -8,20 +8,12 @@ Please refer to [README.md](../../../README.md)
 
 ### Launch the Server
 ```bash
-export MODEL_PATH= "./MiMo-Audio-7B-Instruct"
-export STAGE_CONFIGS_PATH="./model_executor/stage_configs/mimo_audio/mimo_audio.yaml"
-export CUDA_LAUNCH_BLOCKING=1
-export MIMO_AUDIO_TOKENIZER_PATH="./MiMo-Audio-Tokenizer"
-export MIMO_AUDIO_TOKENIZER_CONFIG_PATH="./MiMo-Audio-Tokenizer"
-export MIMO_AUDIO_ECHO_CODES="false"
-```
+export MIMO_AUDIO_TOKENIZER_PATH="XiaomiMiMo/MiMo-Audio-Tokenizer"
 
-
-```bash
-vllm-omni serve  ${MODEL_PATH} --omni \
+vllm-omni serve XiaomiMiMo/MiMo-Audio-7B-Instruct --omni \
 --served-model-name "MiMo-Audio-7B-Instruct"  \
---port 8091 --stage-configs-path ${STAGE_CONFIGS_PATH} \
---chat-template ./chat_template.jinja
+--port 8091 --stage-configs-path ./vllm_omni/model_executor/stage_configs/mimo_audio.yaml \
+--chat-template ./examples/online_serving/mimo_audio/chat_template.jinja
 ```
 > ⚠️ **Important**  
 > **MiMo-Audio is not compatible with the default chat template.**  

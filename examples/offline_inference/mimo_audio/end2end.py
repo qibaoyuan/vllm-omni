@@ -388,7 +388,7 @@ def parse_args():
         "--model-name",
         "-m",
         type=str,
-        default="MiMo-Audio-7B-Instruct",
+        default="XiaomiMiMo/MiMo-Audio-7B-Instruct",
         help="Backbone LLM path.",
     )
     parser.add_argument(
