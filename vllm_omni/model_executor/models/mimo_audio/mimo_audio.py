@@ -531,6 +531,7 @@ class MiMoAudioForConditionalGeneration(
         super().__init__()
         self.has_preprocess = False
         self.have_multimodal_outputs = True
+        self.requires_raw_input_tokens = True
         config = vllm_config.model_config.hf_config
         config = MiMoAudioConfig(**vars(config)) if isinstance(config, Qwen2Config) else config
         quant_config = vllm_config.quant_config
@@ -631,12 +632,11 @@ class MiMoAudioForConditionalGeneration(
             mm_kwargs,
             device=self.device,
             pin_memory=self.pin_memory,
-            merge_by_field_config=self.merge_by_field_config,
-            multimodal_cpu_fields=self.multimodal_cpu_fields,
         ):
             # MiMoAudio is only supported audio modality
             mm_kwargs_group["prompt_ids"] = prompt_ids
             mm_kwargs_group["modality_preprocess"] = True
+            mm_kwargs_group["mm_offset"] = torch.tensor(mm_kwargs_group["mm_offset"], dtype=torch.long, device=self.device)
             mm_embeddings = self.fused_thinker_talker.embed_multimodal(**mm_kwargs_group)
 
         input_embeds = self.fused_thinker_talker.embed_input_ids(
@@ -791,7 +791,7 @@ class MiMoAudioForConditionalGeneration(
         4) Return text hidden states (and audio when applicable).
         """
         if self.model_stage == "fused_thinker_talker":
-            next_speech_tokens, text_hidden_states, added_batch_dim = self.generate_codes(
+            next_speech_tokens, text_hidden_states = self.generate_codes(
                 input_ids=input_ids,
                 positions=positions,
                 inputs_embeds=inputs_embeds,
@@ -826,17 +826,6 @@ class MiMoAudioForConditionalGeneration(
         intermediate_tensors: IntermediateTensors | None = None,
         **kwargs: object,
     ):
-        # Normalize to batched inputs if caller provides 1D/2D unbatched tensors
-        added_batch_dim = False
-        if input_ids is not None and input_ids.ndim == 1:
-            input_ids = input_ids.unsqueeze(0)
-            added_batch_dim = True
-        if positions is not None and positions.ndim == 1:
-            positions = positions.unsqueeze(0)
-            added_batch_dim = True
-        if inputs_embeds is not None and inputs_embeds.ndim == 2:
-            inputs_embeds = inputs_embeds.unsqueeze(0)
-            added_batch_dim = True
         llm_dev = self._module_device(self.fused_thinker_talker)
 
         # if input_ids is None, set it to a zero tensor, in the length of the
@@ -856,7 +845,7 @@ class MiMoAudioForConditionalGeneration(
         # Run llm
         llm_output = self.fused_thinker_talker(
             input_ids=input_ids,
-            positions=positions[0],
+            positions=positions,
             intermediate_tensors=intermediate_tensors,
             inputs_embeds=inputs_embeds,
             **kwargs,
@@ -871,7 +860,7 @@ class MiMoAudioForConditionalGeneration(
         else:
             text_hidden_states = llm_output
 
-        return next_speech_tokens, text_hidden_states, added_batch_dim
+        return next_speech_tokens, text_hidden_states
 
     def generate_audio(self, code, voice_type):
         token2wav_dev = self._module_device(self.token2wav)

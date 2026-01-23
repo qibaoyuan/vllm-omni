@@ -12,6 +12,7 @@ from transformers.models.qwen2.modeling_qwen2 import (
     Qwen2Model as TransformerQwen2Model,
 )
 from vllm.config import VllmConfig
+from vllm_omni.utils.platform_utils import detect_device_type
 from vllm.forward_context import get_forward_context
 from vllm.model_executor.layers.linear import ColumnParallelLinear
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
@@ -443,6 +444,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             architectures=["Qwen2ForCausalLM"],
         )
 
+        self.device = detect_device_type()
         self.global_sampler = MiMoSampler(do_sample=False, temperature=0.6, top_p=0.95)
         self.local_sampler = MiMoSampler(do_sample=False, temperature=0.9, top_p=0.95)
         self.removed_tokens = None
@@ -608,7 +610,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
                     torch.zeros(
                         (audio_length // self.group_size, self.config.hidden_size),
                         dtype=torch.bfloat16,
-                        device=audio_length.device,
+                        device=self.device,
                     )
                 )
             return tuple(mm_dummy_embeddings)
@@ -629,9 +631,6 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         *,
         is_multimodal: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        if input_ids.dim() == 1:
-            input_ids = input_ids.unsqueeze(0)
-
         inputs_embeds = self.model.embed_input_ids(input_ids)
         inputs_embeds.masked_fill_(is_multimodal.unsqueeze(-1), 0.0)
 
@@ -902,7 +901,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
                 cached_req_ids = None
 
         merge_mm_embedding_info, has_merge_mm_embedding, kwargs = self._collect_merge_mm_embedding_info(
-            input_ids[0],
+            input_ids,
             num_reqs=num_reqs,
             cached_req_ids=cached_req_ids,
             query_start_loc=query_start_loc,
@@ -1093,9 +1092,9 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             ignore_id=-100,
         )
         T_groups = prompt_ids_length
-        mm_offset = kwargs.get("mm_offset").squeeze()
-        audio_lengths = kwargs.get("audio_lengths").squeeze()
         group_size = self.group_size
+        mm_offset = kwargs.get("mm_offset")
+        audio_lengths = [x // 4 for x in kwargs.get("audio_lengths", [])]
         audio_codes_list = audio_embeds
 
         # Convert list-format audio codes to tensor format [B, C, T]
@@ -1103,7 +1102,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         converted_audio_codes_list = []
         for codes in audio_codes_list:
             if isinstance(codes, (list, tuple)):
-                codes_tensor = torch.tensor(codes, dtype=torch.long, device=prompt_ids_expand.device)
+                codes_tensor = torch.tensor(codes, dtype=torch.long, device=self.device)
                 if codes_tensor.dim() == 2:
                     codes_tensor = codes_tensor.unsqueeze(0)  # [C, T] -> [1, C, T]
                 converted_audio_codes_list.append(codes_tensor)
@@ -1114,17 +1113,16 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         audio_codes_list = converted_audio_codes_list
 
         dtype = audio_codes_list[0].dtype
-        device = audio_codes_list[0].device
         B = audio_codes_list[0].shape[0]
 
         speech_input_ids = torch.zeros(
-            (B, self.audio_channels, prompt_ids_length * group_size), dtype=dtype, device=device
+            (B, self.audio_channels, prompt_ids_length * group_size), dtype=dtype, device=self.device
         )
         for i, idx in enumerate(self.speech_empty_ids):
             speech_input_ids[:, i, :] = idx
 
         speech_input_ids = self._overlay_audio_codes_by_prompt_pad_positions(
-            speech_input_ids, prompt_ids_expand, audio_codes_list, mm_offset, device
+            speech_input_ids, prompt_ids_expand, audio_codes_list, mm_offset, self.device
         )
 
         speech_input_ids = speech_input_ids[:, :, : T_groups * group_size].view(
@@ -1135,13 +1133,12 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         speech_input_ids = speech_input_ids.transpose(1, 2)
 
         # Determine which positions are speech (text token == empty_idx)
-        audio_lengths = audio_lengths // group_size  # 4
         is_speech = (prompt_ids == self.empty_token_id).unsqueeze(0).expand(B, -1)  # [B, T_groups]
 
         # Initialize speech embeddings: [B, T_groups, group_size, hidden_size]
         speech_embeds = torch.zeros(
             (B, T_groups, group_size, self.input_local_config.hidden_size),
-            device=device,
+            device=self.device,
             dtype=torch.bfloat16,
         )
 
@@ -1177,18 +1174,11 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             speech_embeds.view(B, speech_embeds.shape[1], -1)
         )
 
-        if isinstance(audio_lengths, torch.Tensor):
-            audio_lengths = audio_lengths.tolist()
-        if isinstance(audio_lengths, list):
-            seg_lengths = audio_lengths
-        else:
-            seg_lengths = [audio_lengths]
-
         speech_embeds_split = self._split_grouped_embeds_by_speech_flag(
             speech_grouped_embeds=speech_grouped_embeds,  # [B, T_groups, H]
             is_speech_1d=(prompt_ids == self.empty_token_id),
-            seg_lengths=seg_lengths,
-            device=device,
+            seg_lengths=audio_lengths,
+            device=self.device,
         )
 
         # To pass sanity_check_mm_encoder_outputs check with dim = 2
