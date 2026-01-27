@@ -7,6 +7,7 @@ with the correct prompt format on MiMo-Audio-Omni.
 
 import json
 import os
+import numpy as np
 from typing import NamedTuple
 
 import soundfile as sf
@@ -244,7 +245,7 @@ def main(args):
         Request ID: 0_7c161be3-96d3-46b1-9981-a59fa1ae81e5, Saved audio to ./output_audio/tts_sft_with_natural_instruction/0_7c161be3-96d3-46b1-9981-a59fa1ae81e5.wav        """
         query_result = query_func(text=text, read_text_only=False)
     elif args.query_type == "audio_trancribing_sft":
-        # python3 -u end2end.py --stage-configs-path ${config_file_only_llm} --model ${MODEL_PATH}  --query-type audio_trancribing_sft --audio_path "./spoken_dialogue_assistant_turn_1.wav"
+        # python3 -u end2end.py --stage-configs-path ${config_file} --model ${MODEL_PATH}  --query-type audio_trancribing_sft --audio_path "./spoken_dialogue_assistant_turn_1.wav"
         """
         lines ['Prompt:\n', '<|im_start|>user\n<|sosp|><|empty|><|eosp|>请将这段语音内容生成对应文字，并复述一遍<|im_end|>\n<|im_start|>assistant\n<|sostm|>\n', 'vllm_text_output:\n', '今天天气如何？\n']
         Request ID: 0_a9c107ec-7a4e-44fe-a304-d3ee6e1dcca6, Text saved to ./output_audio/audio_trancribe_sft/0_a9c107ec-7a4e-44fe-a304-d3ee6e1dcca6.txt
@@ -254,24 +255,18 @@ def main(args):
         text = "请将这段语音内容生成对应文字，并复述一遍"
         query_result = query_func(text=text, audio_path=audio_path, use_sostm=True)
     elif args.query_type == "audio_understanding_sft":
-        # python3 -u end2end.py --stage-configs-path ${config_file_only_llm} --model ${MODEL_PATH}  --query-type audio_understanding_sft --text "Summarize the audio." --audio_path "./spoken_dialogue_assistant_turn_1.wav"
+        # python3 -u end2end.py --stage-configs-path ${config_file} --model ${MODEL_PATH}  --query-type audio_understanding_sft --text "Summarize the audio." --audio_path "./spoken_dialogue_assistant_turn_1.wav"
         """
         lines ['Prompt:\n', '<|im_start|>user\n<|sosp|><|empty|><|eosp|>Summarize the audio.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n', 'vllm_text_output:\n', "The speaker provides several ways to check today's weather, including using built-in phone features (like Apple Weather), professional services (such as AccuWeather or China Meteoweb), and search engines (Google or Baidu). They also mention that while they can analyze historical weather trends for a specific city, real-time data must be obtained through official sources. The speaker invites the listener to share their location for further assistance.\n"]
         Request ID: 0_0e3dd143-99fd-4f37-8d0c-f78859e76665, Text saved to ./output_audio/audio_understanding_sft/0_0e3dd143-99fd-4f37-8d0c-f78859e76665.txt
         """
-        sampling_params_list = [
-            thinker_sampling_params,
-        ]
         query_result = query_func(text=text, audio_path=audio_path)
     elif args.query_type == "audio_understanding_sft_with_thinking":
-        # python3 -u end2end.py --stage-configs-path ${config_file_only_llm} --model ${MODEL_PATH}  --query-type audio_understanding_sft_with_thinking --text "Summarize the audio." --audio_path "./spoken_dialogue_assistant_turn_1.wav"
+        # python3 -u end2end.py --stage-configs-path ${config_file} --model ${MODEL_PATH}  --query-type audio_understanding_sft_with_thinking --text "Summarize the audio." --audio_path "./spoken_dialogue_assistant_turn_1.wav"
         """
         lines ['Prompt:\n', '<|im_start|>user\n<|sosp|><|empty|><|eosp|>Summarize the audio.<|im_end|>\n<|im_start|>assistant\n<think>\n\n', 'vllm_text_output:\n', 'The user wants a summary of the provided audio transcript.\n\n1.  **Identify the core topic:** The main subject is how to check today\'s weather forecast.\n2.  **Recognize the key constraint:** The speaker explicitly states they cannot access real-time data themselves ("我没办法获取实时的天气信息").\n3.  **List the methods suggested:** The speaker provides several alternative ways for the listener to find the weather information:\n    *   Using built-in phone features (specifically mentioning Apple\'s Weather app and checking in "系统设置" - system settings).\n    *   Using professional weather services, giving examples like AccuWeather, Weather.com, and Chinese services like 中最天气网 (zhongzuiweather.com) and 梅花天气 (mehua weather).\n    *   Using search engines (Google or Baidu) by searching for "[city name] + 天气" ([城市名] + weather).\n4.  **Note any additional offers or conditions:** The speaker offers to help analyze historical weather trends if the listener provides their city name, but reiterates that current data must be obtained from official sources.\n5.  **Synthesize into a concise summary:** Combine these points into a clear and brief paragraph. Start with the main point (the inability to get live data), then list the recommended methods, and finally include the offer for historical analysis. This structure accurately reflects the content and flow of the original audio.\n</think>\nThe speaker explains that they cannot provide real-time weather information directly. Instead, they suggest several methods for the listener to check the current weather:\n\n*   Use the built-in weather application on your smartphone (like Apple\'s Weather app).\n*   Visit professional weather websites such as AccuWeather, Weather.com, 中最天气网, or 梅花天气.\n*   Search for your city followed by the word "天气" (weather) using Google or Baidu.\n\nThe speaker also offers to help analyze historical weather trends for a specific city if the listener provides its name, but emphasizes that all current data should be obtained through official channels.\n']
         Request ID: 0_7899d15a-1d5c-439a-9888-dd8c807b8165, Text saved to ./output_audio/audio_understanding_sft_with_thinking/0_7899d15a-1d5c-439a-9888-dd8c807b8165.txt
         """
-        sampling_params_list = [
-            thinker_sampling_params,
-        ]
         query_result = query_func(text=text, audio_path=audio_path, thinking=True)
     elif args.query_type == "spoken_dialogue_sft_multiturn":
         # python3 -u end2end.py --stage-configs-path ${config_file} --model ${MODEL_PATH}  --query-type spoken_dialogue_sft_multiturn  --audio_path "./prompt_speech_zh_m.wav"
@@ -379,9 +374,13 @@ def main(args):
                 if audio_numpy.ndim > 1:
                     audio_numpy = audio_numpy.flatten()
 
-                # Save audio file with explicit WAV format
-                sf.write(output_wav, audio_numpy, samplerate=24000, format="WAV")
-                print(f"Request ID: {request_id}, Audio saved to {output_wav}")
+                # Check if the audio is empty placeholder
+                is_empty = (audio_numpy.shape == (1, 4096) and np.all(audio_numpy == 0))
+
+                if not is_empty:
+                    # Save audio file with explicit WAV format
+                    sf.write(output_wav, audio_numpy, samplerate=24000, format="WAV")
+                    print(f"Request ID: {request_id}, Audio saved to {output_wav}")
 
 
 def parse_args():

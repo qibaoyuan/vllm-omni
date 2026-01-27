@@ -108,6 +108,8 @@ def llm2code2wav(
                 )
             if len(non_zero_indices) < codec_codes.shape[0]:
                 codec_codes = codec_codes[non_zero_indices]
+        elif "latent" in output.multimodal_output and "code" not in output.multimodal_output:
+            codec_codes = torch.zeros(1, 1, 8, 4, dtype=torch.long)
         else:
             raise ValueError(f"Invalid multimodal_output: {output.multimodal_output}")
 

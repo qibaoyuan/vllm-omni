@@ -750,7 +750,6 @@ def to_prompt(input_segs):
                 out_put.append(input_seg.audio)
 
     prompt = "".join(out_put)
-    print("to_prompt,prompt->", repr(prompt))
     return prompt
 
 

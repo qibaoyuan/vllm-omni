@@ -24,6 +24,8 @@ from vllm_omni.model_executor.models.mimo_audio.modeling_audio_tokenizer import 
 logger = logging.getLogger(__name__)
 
 
+DUMMY_CODE_SHAPE = 36
+
 class MiMoAudioTokenizerWorker:
     def __init__(
         self,
@@ -492,6 +494,12 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
         trimmed = code_tensor[: steps_to_use * group_width]
         groups = trimmed.view(steps_to_use, group_width)
         return groups.to(dtype=torch.float32, device=self.device)
+    
+    def _check_dummy_code_tensor(self, code_tensor: torch.Tensor) -> bool:
+        if code_tensor is not None and code_tensor.numel() == DUMMY_CODE_SHAPE:
+            code_groups = code_tensor.view(self.config.group_size, self.config.audio_channels + 1)
+            return ((code_groups[:, 0] == 151667).all() and (code_groups[:, 1:].sum() == 0).all()).item()
+        return False
 
     def _decode_waveform_from_codes(self, code_tensor: torch.Tensor) -> torch.Tensor:
         # Check if in CUDA graph capture phase
@@ -502,7 +510,7 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
             # Return an empty dummy tensor with shape and dtype consistent with normal output
             return torch.zeros(0, dtype=torch.float32, device=self.device)
 
-        if code_tensor is None or code_tensor.numel() == 0:
+        if code_tensor is None or code_tensor.numel() == 0 or self._check_dummy_code_tensor(code_tensor):
             return torch.zeros(0, dtype=torch.float32, device=self.device)
 
         if code_tensor.ndim > 1:
