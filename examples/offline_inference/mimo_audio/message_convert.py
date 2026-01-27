@@ -364,50 +364,7 @@ def encode_batch(input_features: torch.Tensor, input_lens: torch.Tensor, max_len
 def preprocess_input(input: None | str | torch.Tensor = None, device="cpu", audio_channels=4, group_size=8):
     if isinstance(input, torch.Tensor) or (isinstance(input, str) and os.path.isfile(input)):
         return "<|sosp|><|empty|><|eosp|>"
-        if isinstance(input, torch.Tensor):
-            wav = input
-        else:
-            wav, sr = torchaudio.load(input)
-            if wav.ndim == 2:
-                wav = wav.mean(dim=0)
-            wav = resample_audio_if_needed(wav, sr)
-        wav = wav.to(device)
 
-        if wav.shape[0] < sr:
-            wav = torch.cat(
-                [
-                    wav,
-                    torch.zeros(sr - wav.shape[0], device=wav.device, dtype=wav.dtype),
-                ],
-            )
-
-        mel = wav2mel(wav).transpose(0, 1)  # (seq_len, n_mels)
-
-        input_len = mel.size(0)
-        segment_size = 6000
-        input_len_seg = [segment_size] * (input_len // segment_size)
-        if input_len % segment_size > 0:
-            input_len_seg.append(input_len % segment_size)
-
-        codes_packed = encode_batch(
-            input_features=mel,
-            input_lens=torch.tensor(input_len_seg),
-        )
-
-        codes = codes_packed.transpose(0, 1).detach().cpu()
-        audio_codes = codes[:, :audio_channels]
-
-        # Pad the sequence to be a multiple of group_size by repeating the last frame
-        num_timesteps = audio_codes.shape[0]
-        if num_timesteps % group_size != 0:
-            padding_needed = group_size - (num_timesteps % group_size)
-            last_tokens = audio_codes[-1:, :]  # Keep dim for repeat
-            padding_tokens = last_tokens.repeat(padding_needed, 1)
-            audio_codes = torch.cat([audio_codes, padding_tokens], dim=0)
-
-        audio_tokenized = audio_codes.reshape(-1)
-
-        return audio_tokenized
     else:
         text = input
         if (
