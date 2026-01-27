@@ -832,7 +832,6 @@ class MiMoAudioForConditionalGeneration(
         # same as the embedding seq length
         if input_ids is None:
             input_ids = torch.zeros(inputs_embeds.shape[1], dtype=torch.long, device=llm_dev).unsqueeze(0)  # (1, 0)
-            added_batch_dim = True
 
         # 1) Thinker (ensure inputs on thinker's device)
         if input_ids is not None and input_ids.device != llm_dev:
