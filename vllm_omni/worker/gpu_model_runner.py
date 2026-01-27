@@ -1026,6 +1026,8 @@ class OmniGPUModelRunner(GPUModelRunner):
                     mm_features = getattr(req_state, "mm_features", None)
                     if mm_features and (not req_infos.get("mm_features")):
                         req_infos["mm_features"] = mm_features
+                    req_infos["req_id"] = req_id
+
                 start_offset = int(self.query_start_loc.cpu[req_index])
                 sched_tokens = int(num_scheduled_tokens_np[req_index])
                 s, e = start_offset, start_offset + sched_tokens
