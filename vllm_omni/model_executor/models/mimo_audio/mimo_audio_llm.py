@@ -814,7 +814,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
 
         inputs_embeds = self._embed_input_ids(
             input_ids, _mm_embeddings, is_multimodal=(input_ids == self.empty_token_id)
-        )  # Actually, equals to inputs_embeds = _mm_embeddings
+        ) # Actually, equals to inputs_embeds = _mm_embeddings
         return inputs_embeds
 
     def _generate_speech_tokens_and_audio_embeddings(
