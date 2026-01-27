@@ -364,7 +364,11 @@ def main(args):
         elif stage_outputs.final_output_type == "audio":
             for output in stage_outputs.request_output:
                 request_id = output.request_id
-                audio_tensor = output.multimodal_output["audio"]
+                audio_tensor = output.multimodal_output.get("audio")
+
+                if audio_tensor is None:
+                    continue
+
                 output_wav = os.path.join(output_dir, f"{request_id}.wav")
 
                 # Convert to numpy array and ensure correct format
@@ -374,13 +378,9 @@ def main(args):
                 if audio_numpy.ndim > 1:
                     audio_numpy = audio_numpy.flatten()
 
-                # Check if the audio is empty placeholder
-                is_empty = audio_numpy.shape == (1, 4096) and np.all(audio_numpy == 0)
-
-                if not is_empty:
-                    # Save audio file with explicit WAV format
-                    sf.write(output_wav, audio_numpy, samplerate=24000, format="WAV")
-                    print(f"Request ID: {request_id}, Audio saved to {output_wav}")
+                # Save audio file with explicit WAV format
+                sf.write(output_wav, audio_numpy, samplerate=24000, format="WAV")
+                print(f"Request ID: {request_id}, Audio saved to {output_wav}")
 
 
 def parse_args():

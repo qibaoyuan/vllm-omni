@@ -447,6 +447,10 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
             )
 
             return dummy_hidden
+        
+        if waveform.numel() == 1 and waveform.item() == 0:
+            # Designed for Text output only
+            return None
 
         return waveform
 
@@ -511,8 +515,11 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
             # Return an empty dummy tensor with shape and dtype consistent with normal output
             return torch.zeros(0, dtype=torch.float32, device=self.device)
 
-        if code_tensor is None or code_tensor.numel() == 0 or self._check_dummy_code_tensor(code_tensor):
+        if code_tensor is None or code_tensor.numel() == 0:
             return torch.zeros(0, dtype=torch.float32, device=self.device)
+        
+        if self._check_dummy_code_tensor(code_tensor):
+            return torch.zeros(1, dtype=torch.float32, device=self.device)
 
         if code_tensor.ndim > 1:
             if code_tensor.shape[0] == 1:
