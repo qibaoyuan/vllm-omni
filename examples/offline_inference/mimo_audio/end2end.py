@@ -7,9 +7,9 @@ with the correct prompt format on MiMo-Audio-Omni.
 
 import json
 import os
-import numpy as np
 from typing import NamedTuple
 
+import numpy as np
 import soundfile as sf
 from message_convert import (
     get_audio_data,
@@ -375,7 +375,7 @@ def main(args):
                     audio_numpy = audio_numpy.flatten()
 
                 # Check if the audio is empty placeholder
-                is_empty = (audio_numpy.shape == (1, 4096) and np.all(audio_numpy == 0))
+                is_empty = audio_numpy.shape == (1, 4096) and np.all(audio_numpy == 0)
 
                 if not is_empty:
                     # Save audio file with explicit WAV format

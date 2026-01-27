@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 DUMMY_CODE_SHAPE = 36
 
+
 class MiMoAudioTokenizerWorker:
     def __init__(
         self,
@@ -494,7 +495,7 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
         trimmed = code_tensor[: steps_to_use * group_width]
         groups = trimmed.view(steps_to_use, group_width)
         return groups.to(dtype=torch.float32, device=self.device)
-    
+
     def _check_dummy_code_tensor(self, code_tensor: torch.Tensor) -> bool:
         if code_tensor is not None and code_tensor.numel() == DUMMY_CODE_SHAPE:
             code_groups = code_tensor.view(self.config.group_size, self.config.audio_channels + 1)
