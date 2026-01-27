@@ -636,7 +636,9 @@ class MiMoAudioForConditionalGeneration(
             # MiMoAudio is only supported audio modality
             mm_kwargs_group["prompt_ids"] = prompt_ids
             mm_kwargs_group["modality_preprocess"] = True
-            mm_kwargs_group["mm_offset"] = torch.tensor(mm_kwargs_group["mm_offset"], dtype=torch.long, device=self.device)
+            mm_kwargs_group["mm_offset"] = torch.tensor(
+                mm_kwargs_group["mm_offset"], dtype=torch.long, device=self.device
+            )
             mm_embeddings = self.fused_thinker_talker.embed_multimodal(**mm_kwargs_group)
 
         input_embeds = self.fused_thinker_talker.embed_input_ids(

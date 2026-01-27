@@ -12,7 +12,6 @@ from transformers.models.qwen2.modeling_qwen2 import (
     Qwen2Model as TransformerQwen2Model,
 )
 from vllm.config import VllmConfig
-from vllm_omni.utils.platform_utils import detect_device_type
 from vllm.forward_context import get_forward_context
 from vllm.model_executor.layers.linear import ColumnParallelLinear
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
@@ -55,6 +54,7 @@ from vllm.sequence import IntermediateTensors
 from vllm.utils.tensor_schema import TensorSchema
 
 from vllm_omni.model_executor.models.mimo_audio.config_mimo_audio import MiMoAudioConfig
+from vllm_omni.utils.platform_utils import detect_device_type
 
 logger = logging.getLogger(__name__)
 

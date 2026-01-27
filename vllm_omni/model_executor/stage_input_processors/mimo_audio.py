@@ -2,8 +2,11 @@ from typing import Any
 
 import torch
 from vllm.inputs import TextPrompt
+from vllm.logger import init_logger
 
 from vllm_omni.inputs.data import OmniTokensPrompt
+
+logger = init_logger(__name__)
 
 TALKER_CODEC_PAD_TOKEN_ID = 8292
 TALKER_CODEC_START_TOKEN_ID = 8293
@@ -91,6 +94,18 @@ def llm2code2wav(
             codec_codes = output.multimodal_output["code"].to(torch.long)  # [seq_batch_size, 1, 8, 4]
             is_all_zero = (codec_codes == 0).all(dim=(1, 2, 3))
             non_zero_indices = (~is_all_zero).nonzero(as_tuple=True)[0]
+            if len(non_zero_indices) == 0:
+                # All codec codes are zero - skip this request with a warning
+                request_id = getattr(talker_output, "request_id", f"unknown_{i}")
+                logger.warning(
+                    "Skipping request %s: all codec codes are zero (empty output from Stage-0). "
+                    "This may indicate the model failed to generate valid audio codes.",
+                    request_id,
+                )
+                raise ValueError(
+                    f"Empty codec codes for request {request_id}: "
+                    "Stage-0 produced all-zero codec codes, cannot generate audio."
+                )
             if len(non_zero_indices) < codec_codes.shape[0]:
                 codec_codes = codec_codes[non_zero_indices]
         else:
