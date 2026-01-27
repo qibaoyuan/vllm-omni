@@ -1,3 +1,4 @@
+# Copyright 2025 Xiaomi Corporation.
 import base64
 import io
 import os
@@ -17,7 +18,6 @@ empty_token = "<|empty|>"
 mimo_audio_tokenizer = None
 device = "cpu"
 
-# Copyright 2025 Xiaomi Corporation.
 asr_zh_templates = [
     "请将这段语音转换为文字",
     "帮我识别这个音频文件中的内容",
@@ -751,99 +751,3 @@ def to_prompt(input_segs):
 
     prompt = "".join(out_put)
     return prompt
-
-
-if __name__ == "__main__":
-    input_speech = "./spoken_dialogue_assistant_turn_1.wav"
-    audio_list = get_audio_data(input_speech)
-    res = get_tts_sft_prompt(
-        "今天天气真好！",
-        read_text_only=True,
-        # prompt_speech=input_speech,
-    )
-    prompt = to_prompt(res)
-
-    final_prompt = {
-        "prompt": prompt,
-        "multi_modal_data": {
-            "audio": audio_list,
-        },
-    }
-    print(res)
-    print(final_prompt)
-    exit(1)
-
-    # res = get_tts_sft_prompt(
-    #     "用气喘吁吁的年轻男性声音说：我跑不动了，你等等我！",
-    #      # instruct='用小孩子的声音开心的说',
-    #     read_text_only=False,
-    #     prompt_speech=None,
-    # )
-    #
-    # audio_list = []
-    # input_speech = "./spoken_dialogue_assistant_turn_1.wav"
-    # audio_list.append(get_audio_data(input_speech))
-    #
-    # res = get_audio_understanding_sft_prompt(
-    #     input_speech="./spoken_dialogue_assistant_turn_1.wav",
-    #     input_text="Summarize the audio."
-    # )
-    # prompt = to_prompt(res)
-    #
-    # final_prompt = {
-    #     "prompt": prompt,
-    #     "multi_modal_data": {
-    #         "audio": audio_list,
-    #     },
-    # }
-
-    # audio_list = []
-    # first_turn_text_response = "我没办法获取实时的天气信息。不过呢，你可以试试几个方法来查看今天的天气。首先，你可以用手机自带的天气功能，比如苹果手机的天气应用，或者直接在系统设置里查看。其次，你也可以用一些专业的天气服务，像是国外的AccuWeather、Weather.com，或者国内的中国天气网、墨迹天气等等。再有就是，你还可以在谷歌或者百度里直接搜索你所在的城市加上天气这两个字。如果你能告诉我你所在的城市，我也可以帮你分析一下历史天气趋势，不过最新的数据还是需要你通过官方渠道去获取哦。"
-    # s1_audio_path="今天天气如何.mp3"
-    # s2_audio_path="spoken_dialogue_assistant_turn_1.wav"
-    # s3_audio_path="北京.mp3"
-    # audio_list.append(get_audio_data(s1_audio_path))
-    # audio_list.append(get_audio_data(s2_audio_path))
-    # audio_list.append(get_audio_data(s3_audio_path))
-    # message_list = [
-    #     {"role": "user", "content": s1_audio_path},
-    #     {"role": "assistant",
-    #      "content": {"text": first_turn_text_response, "audio": s2_audio_path}},
-    #     {"role": "user", "content": s3_audio_path},
-    # ]
-    # res = get_spoken_dialogue_sft_multiturn_prompt(message_list,system_prompt=None, prompt_speech="prompt_speech_zh_m.wav")
-    # prompt = to_prompt(res)
-    #
-    # final_prompt = {
-    #     "prompt": prompt,
-    #     "multi_modal_data": {
-    #         "audio": audio_list,
-    #     },
-    # }
-
-    s1_audio_path = "今天天气如何.mp3"
-    s2_audio_path = "北京.mp3"
-    audio_list = []
-    audio_list.append(get_audio_data(s1_audio_path))
-    audio_list.append(get_audio_data(s2_audio_path))
-    message_list = [
-        {"role": "user", "content": s1_audio_path},
-        {
-            "role": "assistant",
-            "content": "你好，我没办法获取实时的天气信息。如果你能告诉我你所在的城市，我也可以帮你分析一下历史天气趋势，不过最新的数据还是需要你通过官方渠道去获取哦。",
-        },
-        {"role": "user", "content": s2_audio_path},
-    ]
-    res = get_s2t_dialogue_sft_multiturn_prompt(
-        message_list,
-        thinking=True,
-    )
-    prompt = to_prompt(res)
-    final_prompt = {
-        "prompt": prompt,
-        "multi_modal_data": {
-            "audio": audio_list,
-        },
-    }
-    print(res)
-    print(final_prompt)
