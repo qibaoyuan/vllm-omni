@@ -250,12 +250,10 @@ class MiMoLocalDecodeCudaGraph:
         b = local_embeds.shape[0]
         assert b <= self.batch_size, f"Expected batch size <= {self.batch_size}, got {b}"
         with self.buffer.lock:
-            torch.cuda.synchronize()
             self.buffer.prepare(local_embeds, local_sampler)
 
             self.cuda_graph.replay()
 
-            torch.cuda.synchronize()
             if self.output_tensor.dim() == 2:
                 return self.output_tensor.clone()
             return self.output_tensor[:b].clone()
