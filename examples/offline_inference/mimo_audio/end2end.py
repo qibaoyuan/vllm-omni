@@ -190,10 +190,10 @@ def main(args):
     )
 
     thinker_sampling_params = SamplingParams(
-        temperature=0.0,
-        top_p=1.0,
-        top_k=-1,
-        max_tokens=3200,
+        temperature=0.6,
+        top_p=0.95,
+        top_k=50,
+        max_tokens=1024,
         seed=SEED,
         logit_bias={},
         repetition_penalty=1.1,
@@ -227,7 +227,7 @@ def main(args):
     elif args.query_type == "tts_sft_with_instruct":
         # python3 -u end2end.py --stage-configs-path ${config_file} --model ${MODEL_PATH}  --query-type tts_sft_with_instruct --instruct "用小孩子的声音开心的说"
         """
-        lines ['Prompt:\n', '<|im_start|>system\n你需要根据指定的风格指令和文本内容来生成语音。<|im_end|>\n<|im_start|>user\n请将这段文字转换为语音: 今天天气真好(用小孩子的声音开心的说)<|im_end|>\n<|im_start|>assistant\n<think>\n\n', 'vllm_text_output:\n', '好的，这次是要模仿一个小孩子说话。指令很明确，“小孩子”、“开心”。那我的声音就要提得高一点，音色要亮一些，听起来天真无邪。语速嘛，不能太快，得有点慢悠悠、一字一顿的感觉，就像小朋友在认真地表达自己的发现一样。“今天天气真好”，这句话本身就挺阳光的，所以我要带着那种发自内心的喜悦感去说，句尾可以稍微上扬一点点，显得更活泼可爱。\n</think>\n今天天气真好\n']
+        lines ['Prompt:\n', '<|im_start|>system\nYou need to generate speech based on the specified style instructions and text content.<|im_end|>\n<|im_start|>user\n请将这段文字转换为语音: 今天天气真好(用小孩子的声音开心的说)<|im_end|>\n<|im_start|>assistant\n<think>\n\n', 'vllm_text_output:\n', '好的，这次是要模仿一个小孩子说话。指令很明确，“小孩子”、“开心”。那我的声音就要提得高一点，音色要亮一些，听起来天真无邪。语速嘛，不能太快，得有点慢悠悠、一字一顿的感觉，就像小朋友在认真地表达自己的发现一样。“今天天气真好”，这句话本身就挺阳光的，所以我要带着那种发自内心的喜悦感去说，句尾可以稍微上扬一点点，显得更活泼可爱。\n</think>\n今天天气真好\n']
         Request ID: 0_f6885005-c769-47ef-93fb-f22093fb42a6, Text saved to ./output_audio/tts_sft_with_instruct/0_f6885005-c769-47ef-93fb-f22093fb42a6.txt
         Request ID: 0_f6885005-c769-47ef-93fb-f22093fb42a6, Saved audio to ./output_audio/tts_sft_with_instruct/0_f6885005-c769-47ef-93fb-f22093fb42a6.wav
         """
@@ -239,19 +239,19 @@ def main(args):
     elif args.query_type == "tts_sft_with_natural_instruction":
         # python3 -u end2end.py --stage-configs-path ${config_file} --model ${MODEL_PATH}  --query-type tts_sft_with_natural_instruction --text "用气喘吁吁的年轻男性声音说：我跑不动了，你等等我！"
         """
-        lines ['Prompt:\n', '<|im_start|>system\n你需要根据指定的风格指令和文本内容来生成语音。<|im_end|>\n<|im_start|>user\n用气喘吁吁的年轻男性声音说：我跑不动了，你等等我！<|im_end|>\n<|im_start|>assistant\n<think>\n\n', 'vllm_text_output:\n', '好的，这个要求很明确。首先是个年轻男性的声音，然后关键是“气喘吁吁”。这说明他刚经过剧烈运动，体力不支。所以我的声音里得带上明显的喘息声，尤其是在句子的开头和结尾。语速要放慢，断断续续的，好像每说一个字都很费劲。“我跑不动了”这里可以表现出一种无力感，音调稍微有点上扬但又很快落下去。到了“你等等我！”的时候，情绪要更急切一点，因为是在求人，但身体状态还是跟不上，所以这种急切是虚弱中的急切。嗯，重点就是把那种上气不接下气的感觉给做出来。\n</think>\n我跑不动了，你等等我！\n']
+        lines ['Prompt:\n', '<|im_start|>system\nYou need to generate speech based on the specified style instructions and text content.<|im_end|>\n<|im_start|>user\n用气喘吁吁的年轻男性声音说：我跑不动了，你等等我！<|im_end|>\n<|im_start|>assistant\n<think>\n\n', 'vllm_text_output:\n', '好的，这个要求很明确。首先是个年轻男性的声音，然后关键是“气喘吁吁”。这说明他刚经过剧烈运动，体力不支。所以我的声音里得带上明显的喘息声，尤其是在句子的开头和结尾。语速要放慢，断断续续的，好像每说一个字都很费劲。“我跑不动了”这里可以表现出一种无力感，音调稍微有点上扬但又很快落下去。到了“你等等我！”的时候，情绪要更急切一点，因为是在求人，但身体状态还是跟不上，所以这种急切是虚弱中的急切。嗯，重点就是把那种上气不接下气的感觉给做出来。\n</think>\n我跑不动了，你等等我！\n']
         Request ID: 0_7c161be3-96d3-46b1-9981-a59fa1ae81e5, Text saved to ./output_audio/tts_sft_with_natural_instruction/0_7c161be3-96d3-46b1-9981-a59fa1ae81e5.txt
         Request ID: 0_7c161be3-96d3-46b1-9981-a59fa1ae81e5, Saved audio to ./output_audio/tts_sft_with_natural_instruction/0_7c161be3-96d3-46b1-9981-a59fa1ae81e5.wav        """
         query_result = query_func(text=text, read_text_only=False)
     elif args.query_type == "audio_trancribing_sft":
         # python3 -u end2end.py --stage-configs-path ${config_file} --model ${MODEL_PATH}  --query-type audio_trancribing_sft --audio_path "./spoken_dialogue_assistant_turn_1.wav"
         """
-        lines ['Prompt:\n', '<|im_start|>user\n<|sosp|><|empty|><|eosp|>请将这段语音内容生成对应文字，并复述一遍<|im_end|>\n<|im_start|>assistant\n<|sostm|>\n', 'vllm_text_output:\n', '今天天气如何？\n']
+        lines ['Prompt:\n', '<|im_start|>user\n<|sosp|><|empty|><|eosp|>Please transcribe this audio and repeat it once.<|im_end|>\n<|im_start|>assistant\n<|sostm|>\n', 'vllm_text_output:\n', '今天天气如何？\n']
         Request ID: 0_a9c107ec-7a4e-44fe-a304-d3ee6e1dcca6, Text saved to ./output_audio/audio_trancribe_sft/0_a9c107ec-7a4e-44fe-a304-d3ee6e1dcca6.txt
         Request ID: 0_a9c107ec-7a4e-44fe-a304-d3ee6e1dcca6, Audio saved to ./output_audio/audio_trancribe_sft/0_a9c107ec-7a4e-44fe-a304-d3ee6e1dcca6.wav
         """
         audio_path = "spoken_dialogue_assistant_turn_1.wav"
-        text = "请将这段语音内容生成对应文字，并复述一遍"
+        text = "Please transcribe this audio and repeat it once."
         query_result = query_func(text=text, audio_path=audio_path, use_sostm=True)
     elif args.query_type == "audio_understanding_sft":
         # python3 -u end2end.py --stage-configs-path ${config_file} --model ${MODEL_PATH}  --query-type audio_understanding_sft --text "Summarize the audio." --audio_path "./spoken_dialogue_assistant_turn_1.wav"
