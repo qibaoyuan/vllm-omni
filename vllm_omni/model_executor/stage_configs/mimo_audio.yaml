@@ -30,6 +30,7 @@ stage_args:
       seed: 42
       detokenize: True
       repetition_penalty: 1.1
+
   - stage_id: 1
     stage_type: llm
     runtime:
@@ -49,7 +50,7 @@ stage_args:
       max_num_batched_tokens: 68192
       async_scheduling: false
       engine_output_type: audio
-    engine_input_source: [0]
+    engine_input_source: [ 0 ]
     is_comprehension: false
     custom_process_input_func: vllm_omni.model_executor.stage_input_processors.mimo_audio.llm2code2wav
     final_output: true
