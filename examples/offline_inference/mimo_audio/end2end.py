@@ -9,7 +9,6 @@ import json
 import os
 from typing import NamedTuple
 
-import numpy as np
 import soundfile as sf
 from message_convert import (
     get_audio_data,
