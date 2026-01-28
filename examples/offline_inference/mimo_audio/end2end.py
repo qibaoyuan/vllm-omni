@@ -191,10 +191,10 @@ def main(args):
     )
 
     thinker_sampling_params = SamplingParams(
-        temperature=0.6,
-        top_p=0.95,
-        top_k=50,
-        max_tokens=1024,
+        temperature=0.0,
+        top_p=1.0,
+        top_k=-1,
+        max_tokens=2048,
         seed=SEED,
         logit_bias={},
         repetition_penalty=1.1,
@@ -243,7 +243,7 @@ def main(args):
         query_result = query_func(text=text, audio_path=audio_path, thinking=True)
     elif args.query_type == "spoken_dialogue_sft_multiturn":
         # python3 -u end2end.py --stage-configs-path ${config_file} --model ${MODEL_PATH}  --query-type spoken_dialogue_sft_multiturn  --audio_path "./prompt_speech_zh_m.wav"
-        first_turn_text_response = "I can't get real-time weather information. However, you can try a few methods to check today's weather. First, you can use your phone's built-in weather function, such as the Weather app on an iPhone, or check it directly in the system settings. Second, you can use some professional weather services, such as AccuWeather and Weather.com internationally, or China Weather Network and MoWeather domestically. Third, you can directly search for your city plus the word \"weather\" on Google or Baidu. If you can tell me your city, I can also help you analyze historical weather trends, but for the most up-to-date data, you'll need to obtain it through official channels."
+        first_turn_text_response = "我没办法获取实时的天气信息。不过呢，你可以试试几个方法来查看今天的天气。首先，你可以用手机自带的天气功能，比如苹果手机的天气应用，或者直接在系统设置里查看。其次，你也可以用一些专业的天气服务，像是国外的AccuWeather、Weather.com，或者国内的中国天气网、墨迹天气等等。再有就是，你还可以在谷歌或者百度里直接搜索你所在的城市加上天气这两个字。如果你能告诉我你所在的城市，我也可以帮你分析一下历史天气趋势，不过最新的数据还是需要你通过官方渠道去获取哦。"
         audio_list = []
         s1_audio_path = "weather_of_today.mp3"
         s2_audio_path = "spoken_dialogue_assistant_turn_1.wav"
