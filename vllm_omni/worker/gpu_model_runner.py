@@ -897,6 +897,29 @@ class OmniGPUModelRunner(GPUModelRunner):
 
         return req_infos
 
+    def _maybe_attach_mimo_audio_req_infos(
+        self,
+        req_state: CachedRequestState | None,
+        req_infos: dict | None,
+        req_id: str,
+    ) -> dict | None:
+        """Attach MiMoAudio-specific fields into req_infos if applicable.
+
+        This helper is intentionally small and self-contained so that it can be
+        unit-tested to prevent regressions when updating MiMoAudio handling.
+        """
+        if req_state is None or self.model.__class__.__name__ != "MiMoAudioForConditionalGeneration":
+            return req_infos
+
+        # Always operate on a dict copy to avoid mutating shared instances.
+        req_infos = dict(req_infos) if isinstance(req_infos, dict) else {}
+        mm_features = getattr(req_state, "mm_features", None)
+        if mm_features and (not req_infos.get("mm_features")):
+            req_infos["mm_features"] = mm_features
+        req_infos["req_id"] = req_id
+
+        return req_infos
+
     def _preprocess(
         self,
         scheduler_output: "SchedulerOutput",
@@ -1021,12 +1044,8 @@ class OmniGPUModelRunner(GPUModelRunner):
                         getattr(req_state, "additional_information_cpu", None) if req_state is not None else None
                     )
 
-                if req_state is not None and self.model.__class__.__name__ == "MiMoAudioForConditionalGeneration":
-                    req_infos = dict(req_infos) if isinstance(req_infos, dict) else {}
-                    mm_features = getattr(req_state, "mm_features", None)
-                    if mm_features and (not req_infos.get("mm_features")):
-                        req_infos["mm_features"] = mm_features
-                    req_infos["req_id"] = req_id
+                # mimo-audio check
+                req_infos = self._maybe_attach_mimo_audio_req_infos(req_state, req_infos, req_id)
 
                 start_offset = int(self.query_start_loc.cpu[req_index])
                 sched_tokens = int(num_scheduled_tokens_np[req_index])
