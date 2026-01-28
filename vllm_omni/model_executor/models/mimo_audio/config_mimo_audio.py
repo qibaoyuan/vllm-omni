@@ -2,7 +2,7 @@
 import copy
 from dataclasses import dataclass
 
-from transformers import Qwen2Config, PretrainedConfig
+from transformers import PretrainedConfig, Qwen2Config
 
 
 @dataclass
