@@ -7,19 +7,20 @@ import torch.nn as nn
 from torch.nn import functional as F
 from transformers.activations import ACT2FN
 from transformers.modeling_utils import PreTrainedModel
+from vllm.logger import init_logger
 
 from .config_mimo_audio import MiMoAudioTokenizerConfig
 from .modeling_rope_utils import ROPE_INIT_FUNCTIONS, apply_rotary_pos_emb, dynamic_rope_update
 from .quantization import ResidualVectorQuantizer
 
+logger = init_logger(__name__)
 is_flash_atth_available = False
 try:
     from flash_attn import flash_attn_varlen_func
 
     is_flash_atth_available = True
 except Exception:
-    print("flash_attn not installed")
-    pass
+    logger.warning("flash_attn not installed")
 
 
 def get_sequence_mask(inputs, inputs_length):
