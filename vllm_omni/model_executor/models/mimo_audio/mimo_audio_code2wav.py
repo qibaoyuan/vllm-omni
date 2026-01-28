@@ -403,7 +403,12 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
         )
         self.debug_echo_codes = os.environ.get("MIMO_AUDIO_ECHO_CODES", "0") not in ("0", "", "false", "False", "FALSE")
 
-    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]], audio__dict_path: str) -> set[str]:
+    def load_weights(
+        self,
+        weights: Iterable[tuple[str, torch.Tensor]],
+        audio__dict_path: str | None = None,
+        **kwargs,
+    ) -> set[str]:
         # Decoder has no trainable weights to load in this stage.
         return set()
 
