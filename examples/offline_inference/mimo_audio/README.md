@@ -50,6 +50,8 @@ python3 -u end2end.py \
   --num-prompts {batch_size}
 ```
 
+When enabling multi-batch processing, if the total number of tokens passed to the next stage exceeds the `max_model_len` value in the `mimo_audio.yaml` configuration file, you must also synchronously update the `max_position_embeddings` value in `MiMo-Audio-7B-Instruct/config.json` to match the modified value.
+
 Generated audio files are saved to `output_audio/` by default. `--num-prompts` also can be used to all tasks below.
 
 ## Task Usage
