@@ -198,7 +198,7 @@ def get_system_prompt(message_json_path: str | None = None):
 
 
 def get_text_query(custom_prompt: str | None = None):
-    question = f"请将这段文字转换为语音: {custom_prompt}"
+    question = f"Please convert this text to speech: {custom_prompt}"
     prompt = {
         "role": "user",
         "content": [
