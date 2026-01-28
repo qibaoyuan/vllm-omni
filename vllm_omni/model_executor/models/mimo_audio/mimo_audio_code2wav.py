@@ -61,7 +61,11 @@ class MiMoAudioTokenizerWorker:
             dtype=model_dtype,
             device_map={"": self.device},
         )
-        self.audio_tokenizer.eval().bfloat16().to(self.device)
+        # Move to target device and only cast to bfloat16 on non-CPU devices.
+        self.audio_tokenizer.to(self.device)
+        if self.device != "cpu" and model_dtype == torch.bfloat16:
+            self.audio_tokenizer.to(dtype=torch.bfloat16)
+        self.audio_tokenizer.eval()
 
         logger.info(
             f"Audio Tokenizers loaded in "
