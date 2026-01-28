@@ -102,12 +102,9 @@ def llm2code2wav(
                     "This may indicate the model failed to generate valid audio codes.",
                     request_id,
                 )
-                raise ValueError(
-                    f"Empty codec codes for request {request_id}: "
-                    "Stage-0 produced all-zero codec codes, cannot generate audio."
-                )
-            if len(non_zero_indices) < codec_codes.shape[0]:
-                codec_codes = codec_codes[non_zero_indices]
+            else:
+                if len(non_zero_indices) < codec_codes.shape[0]:
+                    codec_codes = codec_codes[non_zero_indices]
         elif "latent" in output.multimodal_output and "code" not in output.multimodal_output:
             codec_codes = torch.zeros(1, 1, 8, 4, dtype=torch.long)
         else:
