@@ -41,7 +41,6 @@ from vllm_omni.worker.gpu_model_runner import OmniGPUModelRunner
 
 logger = init_logger(__name__)
 
-
 class ExecuteModelState(NamedTuple):
     scheduler_output: SchedulerOutput
     logits: torch.Tensor | None
@@ -53,7 +52,6 @@ class ExecuteModelState(NamedTuple):
     ec_connector_output: Any
     cudagraph_stats: Any
     multimodal_outputs: Any
-
 
 class GPUARModelRunner(OmniGPUModelRunner):
     """Autoregressive GPU model runner that returns hidden states per request.
@@ -500,9 +498,134 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 dtype=np.int32,
             )
 
+        # // AIGC START
+        # Inject sampled_token_id / request_id into per-request additional information
+        # so model.postprocess(_batch) can decide whether to run local decoding.
+        sampled_token_ids_list: list[int] = []
+        
+        # Debug: print valid_sampled_token_ids to understand its structure
+        # print(f"[AR] valid_sampled_token_ids type={type(valid_sampled_token_ids)}, value={valid_sampled_token_ids}")
+        
+        if valid_sampled_token_ids is None:
+            # print(f"[AR] WARNING: valid_sampled_token_ids is None! Trying sampler_output.sampled_token_ids as fallback")
+            # Fallback to sampler_output.sampled_token_ids if valid_sampled_token_ids is None
+            if hasattr(self, 'execute_model_state') and self.execute_model_state is not None:
+                # Try to get from the most recent sampler_output
+                pass  # We'll handle this below
+        elif isinstance(valid_sampled_token_ids, torch.Tensor):
+            sampled_token_ids_list = [int(t) for t in valid_sampled_token_ids.tolist()]
+            # print(f"[AR] Parsed from Tensor: sampled_token_ids_list={sampled_token_ids_list}")
+        elif isinstance(valid_sampled_token_ids, (list, tuple)):
+            for t in valid_sampled_token_ids:
+                if isinstance(t, (list, tuple)) and t:
+                    sampled_token_ids_list.append(int(t[0]))
+                elif isinstance(t, (list, tuple)):
+                    continue
+                else:
+                    sampled_token_ids_list.append(int(t))
+            # print(f"[AR] Parsed from list/tuple: sampled_token_ids_list={sampled_token_ids_list}")
+        else:
+            # print(f"[AR] WARNING: valid_sampled_token_ids is unexpected type: {type(valid_sampled_token_ids)}")
+            pass
+        
+        # If sampled_token_ids_list is still empty, try to get from sampler_output.sampled_token_ids
+        if len(sampled_token_ids_list) == 0 and len(req_ids_output_copy) > 0:
+            # print(f"[AR] sampled_token_ids_list is empty, trying sampler_output.sampled_token_ids as fallback")
+            if hasattr(sampler_output, 'sampled_token_ids') and sampler_output.sampled_token_ids is not None:
+                if isinstance(sampler_output.sampled_token_ids, torch.Tensor):
+                    # Map to req_ids_output_copy using req_id_to_index_output_copy
+                    for rid in req_ids_output_copy:
+                        idx = req_id_to_index_output_copy.get(rid)
+                        if idx is not None and idx < len(sampler_output.sampled_token_ids):
+                            token_id = int(sampler_output.sampled_token_ids[idx].item())
+                            sampled_token_ids_list.append(token_id)
+                            # print(f"[AR] Got token_id={token_id} for req_id={rid} from sampler_output")
+                        else:
+                            # print(f"[AR] WARNING: Cannot map req_id={rid} to sampled_token_ids (idx={idx})")
+                            sampled_token_ids_list.append(None)
+                else:
+                    # print(f"[AR] sampler_output.sampled_token_ids is not a Tensor: {type(sampler_output.sampled_token_ids)}")
+                    pass
+            else:
+                # print(f"[AR] sampler_output.sampled_token_ids is not available")
+                pass
+                # Set None for all requests as placeholder
+                sampled_token_ids_list = [None] * len(req_ids_output_copy)
+
+        # Debug: print req_ids to verify matching
+        # print(f"[AR] Injecting sampled_token_id: req_ids_output_copy={req_ids_output_copy}, input_batch.req_ids={self.input_batch.req_ids}")
+        # print(f"[AR] sampled_token_ids_list length={len(sampled_token_ids_list)}, req_ids_output_copy length={len(req_ids_output_copy)}")
+        # // AIGC END
+        
+        for rid, token_id in zip(req_ids_output_copy, sampled_token_ids_list):
+            req_state = self.requests.get(rid)
+            if req_state is None:
+                # // AIGC START
+                # print(f"[AR] WARNING: req_state is None for rid={rid}")
+                # // AIGC END
+                continue
+            info = getattr(req_state, "additional_information_cpu", None)
+            if not isinstance(info, dict):
+                info = {}
+            # // AIGC START
+            # Handle None token_id (from fallback)
+            if token_id is not None:
+                info["sampled_token_id"] = int(token_id)
+                # print(f"[AR] Injected sampled_token_id={int(token_id)} for rid={rid}")
+            else:
+                info["sampled_token_id"] = None
+                # print(f"[AR] Injected sampled_token_id=None for rid={rid} (fallback)")
+            # // AIGC END
+            info["request_id"] = rid
+            # Keep a stable key name used by MiMo path.
+            info["req_id"] = rid
+            setattr(req_state, "additional_information_cpu", info)
+        
+        # // AIGC START
+        # Also ensure all requests in input_batch have sampled_token_id injected
+        # (in case req_ids_output_copy and input_batch.req_ids differ)
+        for req_id in self.input_batch.req_ids:
+            if req_id not in req_ids_output_copy:
+                # This request was filtered out, but we still need to set a placeholder
+                req_state = self.requests.get(req_id)
+                if req_state is not None:
+                    info = getattr(req_state, "additional_information_cpu", None)
+                    if not isinstance(info, dict):
+                        info = {}
+                    # Mark as None to indicate this request was filtered
+                    if "sampled_token_id" not in info:
+                        info["sampled_token_id"] = None
+                    info["request_id"] = req_id
+                    info["req_id"] = req_id
+                    setattr(req_state, "additional_information_cpu", info)
+                    # print(f"[AR] Set placeholder sampled_token_id=None for filtered req_id={req_id}")
+            else:
+                # Verify injection was successful
+                req_state = self.requests.get(req_id)
+                if req_state is not None:
+                    info = getattr(req_state, "additional_information_cpu", None)
+                    if isinstance(info, dict) and "sampled_token_id" in info:
+                        # print(f"[AR] Verified: req_id={req_id} has sampled_token_id={info.get('sampled_token_id')}")
+                        pass
+                    else:
+                        # print(f"[AR] ERROR: req_id={req_id} missing sampled_token_id after injection!")
+                        pass
+        # // AIGC END
+
+        # // AIGC START
+        # Store req_ids_output_copy for use in _process_additional_information_updates
+        # so that postprocess_batch uses the same req_ids order as sampled_token_id injection
+        self._current_req_ids_output_copy = req_ids_output_copy
+        # // AIGC END
+        
         self._process_additional_information_updates(
             hidden_states, multimodal_outputs, num_scheduled_tokens_np, scheduler_output
         )
+        
+        # // AIGC START
+        # Clean up
+        self._current_req_ids_output_copy = None
+        # // AIGC END
 
         pooler_output: list[dict[str, object]] = []
         for rid in req_ids_output_copy:
@@ -534,6 +657,19 @@ class GPUARModelRunner(OmniGPUModelRunner):
                         logger.error(f"Error in merge multimodal outputs: {e}")
                 if mm_payload:
                     payload.update(mm_payload)
+
+            # // AIGC START
+            # Add per-request codec code (generated in postprocess) into pooler_output,
+            # so downstream stage_input_processor can read output.multimodal_output["code"].
+            req_state = self.requests.get(rid)
+            if req_state is not None:
+                info = getattr(req_state, "additional_information_cpu", None)
+                if isinstance(info, dict):
+                    code = info.get("code")
+                    if code is not None:
+                        payload["code"] = code
+            # // AIGC END
+
             pooler_output.append(payload)
         with record_function_or_nullcontext("gpu_model_runner: ModelRunnerOutput"):
             if self.model_config.enable_return_routed_experts:

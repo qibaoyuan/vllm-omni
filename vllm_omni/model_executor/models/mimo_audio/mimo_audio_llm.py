@@ -1019,79 +1019,13 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         inputs_embeds: torch.Tensor | None = None,
         **kwargs: object,
     ) -> torch.Tensor | IntermediateTensors:
-        _forward_context = get_forward_context()
-        _default_query_start_loc = torch.tensor([0, input_ids.shape[-1]], device=input_ids.device)
-        query_start_loc = (
-            next(iter(_forward_context.attn_metadata.values())).query_start_loc
-            if _forward_context.attn_metadata is not None
-            else _default_query_start_loc
-        )
-
-        runtime_additional_information = kwargs.get("runtime_additional_information", [])
-        if runtime_additional_information:
-            request_ids = [info.get("req_id", str(i)) for i, info in enumerate(runtime_additional_information)]
-        else:
-            request_ids = [str(i) for i in range(len(query_start_loc[1:]))] if query_start_loc is not None else []
-        num_reqs = len(request_ids)
-        is_capturing = torch.cuda.is_current_stream_capturing()
-
-        merge_mm_embedding_info, has_merge_mm_embedding, kwargs = self._collect_merge_mm_embedding_info(
-            input_ids,
-            request_ids=request_ids,
-            query_start_loc=query_start_loc,
-            kwargs=kwargs,
-        )
-
-        prev_new_audio_emb_by_req = self._load_cached_state()
-
-        # NOTE: In v1, inputs_embeds is always generated at model runner, this
-        # condition is for v0 compatibility.
-        if has_merge_mm_embedding:
-            inputs_embeds = self._prepare_multimodal_embeddings_with_cache(
-                input_ids, merge_mm_embedding_info, prev_new_audio_emb_by_req, kwargs
-            )
-
+        # // AIGC START
+        # Keep model forward CUDA-graph friendly: no Python dict/cache access,
+        # no local decoding, and no sampled-token branching here.
+        # Local decoding is triggered in runner postprocess_batch (graph-external).
         hidden_states = self.model(input_ids, positions, intermediate_tensors, inputs_embeds=inputs_embeds)
-
-        logits = self.compute_logits(hidden_states)
-        logits_indices = query_start_loc[1:] - 1
-        next_ids = self.global_sampler.sample(logits[logits_indices], removed_tokens=self.removed_tokens)
-
-        new_audio_emb_by_req: dict[str, torch.Tensor] = {}
-        batch_next_speech_tokens: torch.Tensor | None = None
-
-        if not is_capturing and next_ids is not None and num_reqs > 0:
-            if (next_ids == self.empty_token_id).any():
-                batch_hs_list = []
-                valid_mask = []
-
-                for req_idx in range(num_reqs):
-                    start = int(query_start_loc[req_idx].item())
-                    end = int(query_start_loc[req_idx + 1].item())
-                    hs_req = hidden_states[start:end][-1:, :]
-                    is_empty = bool(next_ids[req_idx] == self.empty_token_id)
-                    valid_mask.append(is_empty)
-
-                    if not is_empty:
-                        hs_req = torch.zeros_like(hs_req)
-                    batch_hs_list.append(hs_req)
-
-                batch_hs = torch.stack(batch_hs_list, dim=0)
-                batch_next_speech_tokens, batch_new_audio_emb = self._generate_speech_tokens_and_audio_embeddings(
-                    batch_hs
-                )
-
-                for req_idx, is_valid in enumerate(valid_mask):
-                    if is_valid:
-                        req_id = request_ids[req_idx] if request_ids is not None else str(req_idx)
-                        if batch_new_audio_emb is not None:
-                            new_audio_emb_by_req[req_id] = batch_new_audio_emb[req_idx]
-                    else:
-                        batch_next_speech_tokens[req_idx] = torch.zeros_like(batch_next_speech_tokens[req_idx])
-
-        self._update_request_caches(request_ids, new_audio_emb_by_req)
-
-        return batch_next_speech_tokens, hidden_states
+        return hidden_states
+        # // AIGC END
 
     def _update_request_caches(
         self,
