@@ -10,6 +10,7 @@ from torch import nn
 from transformers import BatchFeature, Qwen2Config
 from vllm.config import VllmConfig
 from vllm.config.multimodal import BaseDummyOptions
+from vllm.logger import init_logger
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.models import SupportsPP
 from vllm.model_executor.models.interfaces import SupportsMultiModal
@@ -46,6 +47,7 @@ from vllm_omni.model_executor.models.mimo_audio.config_mimo_audio import MiMoAud
 from vllm_omni.model_executor.models.mimo_audio.mimo_audio_code2wav import MiMoAudioTokenizerWorker
 from vllm_omni.model_executor.models.qwen2_5_omni.qwen2_5_omni import OmniOutput
 
+logger = init_logger(__name__)
 _TOKENIZER_WORKER_CACHE: dict[tuple[str, str, str], MiMoAudioTokenizerWorker] = {}
 
 
@@ -454,8 +456,8 @@ class MiMoAudioLLMMultiModalProcessor(BaseMultiModalProcessor[MiMoAudioLLMProces
                     if audios is not None:
                         num_audios = audios.get_count()
                         audio_output_lengths = [audios.get_audio_length(i) for i in range(num_audios)]
-                except (KeyError, TypeError, AttributeError):
-                    pass
+                except Exception as e:
+                    logger.error(f"_get_prompt_updates failed: {e}")
 
         def get_replacement_mimo_audio(item_idx: int):
             if item_idx >= len(audio_output_lengths):

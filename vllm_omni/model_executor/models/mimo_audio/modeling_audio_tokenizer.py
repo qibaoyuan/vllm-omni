@@ -757,7 +757,6 @@ class MiMoAudioTokenizer(PreTrainedModel):
     @torch.no_grad()
     def encode(self, mels, input_lens, use_quantizer=True):
         input_features = mels
-        encoder_output_length = self.get_output_length(input_lens)
         hidden_states, hidden_states_packed, encoder_output_length, codes = self.encoder.encode(
             input_features, input_lens=input_lens, use_quantizer=use_quantizer
         )
