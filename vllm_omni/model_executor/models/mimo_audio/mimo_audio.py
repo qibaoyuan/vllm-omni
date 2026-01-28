@@ -618,7 +618,7 @@ class MiMoAudioForConditionalGeneration(
             return self.fused_thinker_talker_prefill(input_ids, input_embeds, **info_dict)
         else:
             # decode
-            return self.fused_thinker_talker_decode_one_step(input_ids, input_embeds, **info_dict)
+            return input_ids, input_embeds, info_dict
 
     def fused_thinker_talker_prefill(self, input_ids: torch.Tensor, input_embeds: torch.Tensor, **info_dict: dict):
         empty_token_id = self.fused_thinker_talker.empty_token_id
@@ -661,11 +661,6 @@ class MiMoAudioForConditionalGeneration(
         )
 
         return prompt_ids, input_embeds, info_dict
-
-    def fused_thinker_talker_decode_one_step(
-        self, input_ids: torch.Tensor, input_embeds: torch.Tensor, **info_dict: dict
-    ):
-        return input_ids, input_embeds, info_dict
 
     @staticmethod
     def _module_device(module: nn.Module) -> torch.device:
@@ -792,7 +787,6 @@ class MiMoAudioForConditionalGeneration(
         intermediate_tensors: IntermediateTensors | None = None,
         inputs_embeds: torch.Tensor | None = None,
         generate_audio: bool = True,
-        voice_type: str = "柚子",
         codec: torch.Tensor | None = None,
         sampling_metadata: SamplingMetadata | None = None,
         logits_index: int | None = None,
@@ -832,7 +826,7 @@ class MiMoAudioForConditionalGeneration(
                 )
             )
 
-            audio_tensor = self.generate_audio(code, voice_type)
+            audio_tensor = self.generate_audio(code)
             return OmniOutput(text_hidden_states=None, multimodal_outputs={"audio": audio_tensor})
 
     def generate_codes(
@@ -878,7 +872,7 @@ class MiMoAudioForConditionalGeneration(
 
         return next_speech_tokens, text_hidden_states
 
-    def generate_audio(self, code, voice_type):
+    def generate_audio(self, code):
         token2wav_dev = self._module_device(self.token2wav)
         # Check if in CUDA graph capture phase
         is_capturing = torch.cuda.is_current_stream_capturing()
