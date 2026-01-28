@@ -61,12 +61,12 @@ def interleave_5_and_5_in_span(
 ) -> list[int]:
     """
     Interleave text tokens and padding tokens within spans marked by special tokens.
-    
+
     Finds spans delimited by span_start_token and span_end_token, then reorganizes
     tokens inside each span by grouping text tokens (excluding padding) into groups
     of text_group_size, followed by pad_group_size padding tokens. Interleaving is
     skipped if the token after span_end_token is no_interleave_next_token.
-    
+
     Args:
         input_ids: Input token ID list
         span_start_token: Token marking span start (default: 151670)
@@ -75,7 +75,7 @@ def interleave_5_and_5_in_span(
         text_group_size: Number of text tokens per group (default: 5)
         pad_group_size: Number of padding tokens per group (default: 5)
         no_interleave_next_token: Skip interleaving if this token follows span_end (default: 151671)
-    
+
     Returns:
         Processed token list with same length as input
     """
@@ -902,9 +902,7 @@ class MiMoAudioForConditionalGeneration(
             code_tensor = code_tensor.squeeze(0)
 
         with torch.inference_mode():
-            audio_tensor = self.token2wav(
-                codes=code_tensor
-            )
+            audio_tensor = self.token2wav(codes=code_tensor)
 
         return audio_tensor
 
