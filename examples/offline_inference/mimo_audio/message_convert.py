@@ -380,13 +380,17 @@ def _build_tts_system_prompt(has_voice_prompt: bool, voice_audio_token=None) -> 
         return [
             create_system_start(),
             create_segment(
-                text="你需要根据指定的风格指令和文本内容来生成和语音prompt具有相同音色的语音。你的音色应该是："
+                text="You need to generate a speech with the same timbre as the speech prompt, based on the specified style instructions and text content. Your timbre should be: "
+                # text="你需要根据指定的风格指令和文本内容来生成和语音prompt具有相同音色的语音。你的音色应该是："
             ),
             create_segment(text="", audio=voice_audio_token),
             create_user_end(),
         ]
     else:
-        return create_system_turn_text_only("你需要根据指定的风格指令和文本内容来生成语音。")
+        # return create_system_turn_text_only("你需要根据指定的风格指令和文本内容来生成语音。")
+        return create_system_turn_text_only(
+            "You need to generate speech based on the specified style instructions and text content."
+        )
 
 
 def _build_tts_system_prompt_no_instruct(has_voice_prompt: bool, voice_audio_token=None) -> list[InputSegment]:
@@ -395,7 +399,8 @@ def _build_tts_system_prompt_no_instruct(has_voice_prompt: bool, voice_audio_tok
         return [
             create_system_start(),
             create_segment(
-                text="你需要根据指定的风格指令和文本内容来生成和语音prompt具有相同音色的语音。你的音色应该是："
+                text="You need to generate a speech with the same timbre as the speech prompt, based on the specified style instructions and text content. Your timbre should be:"
+                # text="你需要根据指定的风格指令和文本内容来生成和语音prompt具有相同音色的语音。你的音色应该是："
             ),
             create_segment(text="", audio=voice_audio_token),
             create_user_end(),
