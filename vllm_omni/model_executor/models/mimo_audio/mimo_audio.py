@@ -718,7 +718,7 @@ class MiMoAudioForConditionalGeneration(
     def last_index_of(self, list, value):
         return len(list) - 1 - list[::-1].index(value)
 
-    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> None:
         """Load weights for all components of the omni model."""
         loaded_weights = set()
         llm_weights = []
