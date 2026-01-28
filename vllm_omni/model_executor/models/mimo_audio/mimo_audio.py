@@ -59,6 +59,26 @@ def interleave_5_and_5_in_span(
     pad_group_size: int = 5,
     no_interleave_next_token: int = 151671,
 ) -> list[int]:
+    """
+    Interleave text tokens and padding tokens within spans marked by special tokens.
+    
+    Finds spans delimited by span_start_token and span_end_token, then reorganizes
+    tokens inside each span by grouping text tokens (excluding padding) into groups
+    of text_group_size, followed by pad_group_size padding tokens. Interleaving is
+    skipped if the token after span_end_token is no_interleave_next_token.
+    
+    Args:
+        input_ids: Input token ID list
+        span_start_token: Token marking span start (default: 151670)
+        span_end_token: Token marking span end (default: 151672)
+        pad_token_id: Padding token ID (default: 151667)
+        text_group_size: Number of text tokens per group (default: 5)
+        pad_group_size: Number of padding tokens per group (default: 5)
+        no_interleave_next_token: Skip interleaving if this token follows span_end (default: 151671)
+    
+    Returns:
+        Processed token list with same length as input
+    """
     if not input_ids:
         return input_ids
 
@@ -229,12 +249,6 @@ class MiMoAudioLLMDummyInputsBuilder(BaseDummyInputsBuilder[MiMoAudioLLMProcessi
         mm_counts: Mapping[str, int],
         mm_options: Mapping[str, BaseDummyOptions] | None = None,
     ) -> ProcessorInputs:
-        num_audios = mm_counts.get("audio", 0)
-        cache_key = f"mimo_audio_dummy_processor_inputs_{seq_len}_{num_audios}"
-        dummy_processor_inputs = MiMoAudioLLMDummyInputsBuilder._processor_inputs_cache.get(cache_key)
-        if dummy_processor_inputs is not None:
-            return dummy_processor_inputs
-
         dummy_text = self.get_dummy_text(mm_counts)
         dummy_mm_data = self.get_dummy_mm_data(seq_len, mm_counts, mm_options)
 
@@ -243,7 +257,6 @@ class MiMoAudioLLMDummyInputsBuilder(BaseDummyInputsBuilder[MiMoAudioLLMProcessi
             mm_data=dummy_mm_data,
         )
 
-        MiMoAudioLLMDummyInputsBuilder._processor_inputs_cache.put(cache_key, dummy_processor_inputs)
         return dummy_processor_inputs
 
 
@@ -563,7 +576,7 @@ class MiMoAudioForConditionalGeneration(
                 # prefix=maybe_prefix(prefix, "model"),
                 hf_config=vllm_config.model_config.hf_config,
                 # Use registry architecture key
-                architectures=["MiMoAudioLLMForConditionalGeneration"],
+                architectures=["MiMoAudioLLMModel"],
             )
             self.token2wav = None
             self.model = self.fused_thinker_talker
@@ -890,7 +903,7 @@ class MiMoAudioForConditionalGeneration(
 
         with torch.inference_mode():
             audio_tensor = self.token2wav(
-                codes=code_tensor,
+                codes=code_tensor
             )
 
         return audio_tensor
