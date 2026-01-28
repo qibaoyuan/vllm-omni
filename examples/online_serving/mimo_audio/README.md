@@ -33,7 +33,7 @@ cd examples/online_serving/mimo_audio
 # Audio dialogue task
 python openai_chat_completion_client_for_multimodal_generation.py \
 --query-type multi_audios \
---message-json /Path/vllm-omni/examples/offline_inference/mimo_audio/message_base64_wav.json
+--message-json ../../offline_inference/mimo_audio/message_base64_wav.json
 ```
 
 The Python client supports the following command-line arguments:
@@ -54,5 +54,5 @@ For example, to use multi rounds audios with local files:
 ```bash
 python openai_chat_completion_client_for_multimodal_generation.py \
 --query-type multi_audios \
---message-json /Path/vllm-omni/examples/offline_inference/mimo_audio/message_base64_wav.json
+--message-json ../../offline_inference/mimo_audio/message_base64_wav.json
 ```
