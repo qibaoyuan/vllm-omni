@@ -8,7 +8,7 @@ from torch.nn import functional as F
 from transformers.activations import ACT2FN
 from transformers.modeling_utils import PreTrainedModel
 
-from .configuration_audio_tokenizer import MiMoAudioTokenizerConfig
+from .config_mimo_audio import MiMoAudioTokenizerConfig
 from .modeling_rope_utils import ROPE_INIT_FUNCTIONS, apply_rotary_pos_emb, dynamic_rope_update
 from .quantization import ResidualVectorQuantizer
 
