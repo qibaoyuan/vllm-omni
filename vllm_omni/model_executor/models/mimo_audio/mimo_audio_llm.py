@@ -723,8 +723,6 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
                 type="audio_features", input_features=input_features, feature_attention_mask=feature_attention_mask
             )
 
-        raise AssertionError("This line should be unreachable.")
-
     def get_language_model(self) -> torch.nn.Module:
         return self.model
 
@@ -1437,14 +1435,14 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
                 pl = past_key_values.get_seq_length()
                 if pl is not None:
                     return int(pl)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"error happened: {e}")
 
         if hasattr(past_key_values, "seen_tokens"):
             try:
                 return int(past_key_values.seen_tokens)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"error happened: {e}")
 
         try:
             if hasattr(past_key_values, "layers") and len(past_key_values.layers) > 0:
@@ -1454,7 +1452,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             if hasattr(past_key_values, "key_cache") and len(past_key_values.key_cache) > 0:
                 k = past_key_values.key_cache[0]
                 return int(k.shape[-2])
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"error happened: {e}")
 
         return 0
