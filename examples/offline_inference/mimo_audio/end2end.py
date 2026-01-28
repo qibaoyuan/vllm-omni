@@ -26,6 +26,7 @@ from vllm_omni.entrypoints.omni import Omni
 from vllm_omni.inputs.data import OmniTokensPrompt
 
 SEED = 42
+
 MAX_CODE2WAV_TOKENS = 18192
 
 
