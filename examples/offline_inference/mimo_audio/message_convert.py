@@ -1,4 +1,3 @@
-# Copyright 2025 Xiaomi Corporation.
 import base64
 import io
 import os

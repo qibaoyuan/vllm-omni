@@ -360,7 +360,7 @@ def parse_args():
         "--prompt",
         "-p",
         type=str,
-        default="你在哪儿？",
+        default="Who are you?",
         help="Custom text prompt/question to use instead of the default prompt for the selected query type.",
     )
     parser.add_argument(
