@@ -54,7 +54,7 @@ from vllm.sequence import IntermediateTensors
 from vllm.utils.tensor_schema import TensorSchema
 
 from vllm_omni.model_executor.models.mimo_audio.config_mimo_audio import MiMoAudioConfig
-from vllm_omni.utils.platform_utils import detect_device_type
+from vllm_omni.platforms import current_omni_platform
 
 logger = logging.getLogger(__name__)
 
@@ -540,7 +540,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             architectures=["Qwen2ForCausalLM"],
         )
 
-        self.device = detect_device_type()
+        self.device = current_omni_platform.get_torch_device()
         self.global_sampler = MiMoSampler(do_sample=False, temperature=0.6, top_p=0.95)
         self.local_sampler = MiMoSampler(do_sample=False, temperature=0.9, top_p=0.95)
         self.removed_tokens = None
