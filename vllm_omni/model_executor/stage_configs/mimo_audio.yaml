@@ -14,7 +14,7 @@ stage_args:
       model_arch: MiMoAudioForConditionalGeneration
       worker_cls: vllm_omni.worker.gpu_ar_worker.GPUARWorker
       scheduler_cls: vllm_omni.core.sched.omni_ar_scheduler.OmniARScheduler
-      gpu_memory_utilization: 0.4
+      gpu_memory_utilization: 0.3
       enforce_eager: true    # need to discuss
       trust_remote_code: true
       engine_output_type: latent   # change the param name,such as pooling_output
@@ -44,7 +44,7 @@ stage_args:
       model_arch: MiMoAudioForConditionalGeneration
       worker_cls: vllm_omni.worker.gpu_generation_worker.GPUGenerationWorker
       scheduler_cls: vllm_omni.core.sched.omni_generation_scheduler.OmniGenerationScheduler
-      gpu_memory_utilization: 0.4
+      gpu_memory_utilization: 0.2
       enforce_eager: true
       trust_remote_code: true
       enable_prefix_caching: false
