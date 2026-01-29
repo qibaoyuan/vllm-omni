@@ -401,7 +401,6 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
             config_path=self.tokenizer_config_path,
             audio_tokenizer_path=self.audio_tokenizer_path,
         )
-        self.debug_echo_codes = os.environ.get("MIMO_AUDIO_ECHO_CODES", "0") not in ("0", "", "false", "False", "FALSE")
 
     def load_weights(
         self,
@@ -426,11 +425,6 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
 
         if code_tensor.numel() == 0:
             raise ValueError("code_tensor is empty.")
-
-        if self.debug_echo_codes:
-            echo = self._echo_code_group(code_tensor)
-            if echo.numel() > 0:
-                return echo
 
         waveform = self._decode_waveform_from_codes(code_tensor)
 
@@ -493,21 +487,6 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
             return torch.tensor(flat, dtype=torch.long)
 
         return code_tensor
-
-    def _echo_code_group(self, code_tensor: torch.Tensor) -> torch.Tensor:
-        """Return the input code group without decoding (debug path)."""
-        group_width = self.streamer_config.audio_channels + 1
-        if group_width <= 0 or code_tensor.numel() < group_width:
-            return torch.zeros(0, dtype=torch.float32, device=self.device)
-
-        max_steps = code_tensor.numel() // group_width
-        if max_steps == 0:
-            return torch.zeros(0, dtype=torch.float32, device=self.device)
-
-        steps_to_use = min(self.streamer_config.group_size, max_steps)
-        trimmed = code_tensor[: steps_to_use * group_width]
-        groups = trimmed.view(steps_to_use, group_width)
-        return groups.to(dtype=torch.float32, device=self.device)
 
     def _check_dummy_code_tensor(self, code_tensor: torch.Tensor) -> bool:
         if code_tensor is not None and code_tensor.numel() == DUMMY_CODE_SHAPE:
