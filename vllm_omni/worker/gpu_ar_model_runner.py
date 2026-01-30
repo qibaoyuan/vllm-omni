@@ -498,7 +498,6 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 dtype=np.int32,
             )
 
-        # // AIGC START
         # Inject sampled_token_id / request_id into per-request additional information
         # so model.postprocess(_batch) can decide whether to run local decoding.
         sampled_token_ids_list: list[int] = []
@@ -555,19 +554,15 @@ class GPUARModelRunner(OmniGPUModelRunner):
         # Debug: print req_ids to verify matching
         # print(f"[AR] Injecting sampled_token_id: req_ids_output_copy={req_ids_output_copy}, input_batch.req_ids={self.input_batch.req_ids}")
         # print(f"[AR] sampled_token_ids_list length={len(sampled_token_ids_list)}, req_ids_output_copy length={len(req_ids_output_copy)}")
-        # // AIGC END
         
         for rid, token_id in zip(req_ids_output_copy, sampled_token_ids_list):
             req_state = self.requests.get(rid)
             if req_state is None:
-                # // AIGC START
                 # print(f"[AR] WARNING: req_state is None for rid={rid}")
-                # // AIGC END
                 continue
             info = getattr(req_state, "additional_information_cpu", None)
             if not isinstance(info, dict):
                 info = {}
-            # // AIGC START
             # Handle None token_id (from fallback)
             if token_id is not None:
                 info["sampled_token_id"] = int(token_id)
@@ -575,13 +570,11 @@ class GPUARModelRunner(OmniGPUModelRunner):
             else:
                 info["sampled_token_id"] = None
                 # print(f"[AR] Injected sampled_token_id=None for rid={rid} (fallback)")
-            # // AIGC END
             info["request_id"] = rid
             # Keep a stable key name used by MiMo path.
             info["req_id"] = rid
             setattr(req_state, "additional_information_cpu", info)
         
-        # // AIGC START
         # Also ensure all requests in input_batch have sampled_token_id injected
         # (in case req_ids_output_copy and input_batch.req_ids differ)
         for req_id in self.input_batch.req_ids:
@@ -610,22 +603,17 @@ class GPUARModelRunner(OmniGPUModelRunner):
                     else:
                         # print(f"[AR] ERROR: req_id={req_id} missing sampled_token_id after injection!")
                         pass
-        # // AIGC END
 
-        # // AIGC START
         # Store req_ids_output_copy for use in _process_additional_information_updates
         # so that postprocess_batch uses the same req_ids order as sampled_token_id injection
         self._current_req_ids_output_copy = req_ids_output_copy
-        # // AIGC END
         
         self._process_additional_information_updates(
             hidden_states, multimodal_outputs, num_scheduled_tokens_np, scheduler_output
         )
         
-        # // AIGC START
         # Clean up
         self._current_req_ids_output_copy = None
-        # // AIGC END
 
         pooler_output: list[dict[str, object]] = []
         for rid in req_ids_output_copy:
@@ -658,7 +646,6 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 if mm_payload:
                     payload.update(mm_payload)
 
-            # // AIGC START
             # Add per-request codec code (generated in postprocess) into pooler_output,
             # so downstream stage_input_processor can read output.multimodal_output["code"].
             req_state = self.requests.get(rid)
@@ -668,7 +655,6 @@ class GPUARModelRunner(OmniGPUModelRunner):
                     code = info.get("code")
                     if code is not None:
                         payload["code"] = code
-            # // AIGC END
 
             pooler_output.append(payload)
         with record_function_or_nullcontext("gpu_model_runner: ModelRunnerOutput"):

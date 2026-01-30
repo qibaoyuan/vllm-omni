@@ -39,18 +39,15 @@ class OmniGPUModelRunner(GPUModelRunner):
         self._omni_per_req_additional_information: dict[str, dict] | None = None
         self._omni_num_scheduled_tokens_np: np.ndarray | None = None
         self._omni_last_model_output: object | None = None
-        # // AIGC START
         # 缓存模型属性检查结果，避免在 CUDA graph 热路径中重复调用 hasattr
         self._model_has_preprocess: bool = False
         self._model_has_postprocess: bool = False
         self._model_has_talker_mtp: bool = False
         self._model_has_make_omni_output: bool = False
         self._model_has_multimodal_outputs: bool = False
-        # // AIGC END
 
     def load_model(self, *args, **kwargs) -> None:
         super().load_model(*args, **kwargs)
-        # // AIGC START
         # 在初始化时缓存属性检查结果，避免在热路径中重复调用 hasattr
         self._model_has_preprocess = hasattr(self.model, "has_preprocess") and getattr(
             self.model, "has_preprocess", False
@@ -81,7 +78,6 @@ class OmniGPUModelRunner(GPUModelRunner):
             )
             self.last_talker_hidden = self._make_buffer(self.max_num_reqs, hidden_size, dtype=self.dtype, numpy=False)
             self.text_step = self._make_buffer(self.max_num_reqs, hidden_size, dtype=self.dtype, numpy=False)
-        # // AIGC END
 
     def _init_mrope_positions(self, req_state: CachedRequestState):
         """Initialize M-RoPE positions for multimodal inputs.
@@ -415,12 +411,10 @@ class OmniGPUModelRunner(GPUModelRunner):
 
     @torch.inference_mode()
     def extract_multimodal_outputs(self, hidden_states: torch.Tensor | list[torch.Tensor] | OmniOutput) -> dict:
-        # // AIGC START
         # 使用缓存的标志，避免在 CUDA graph 热路径中调用 hasattr
         if self._model_has_multimodal_outputs and isinstance(hidden_states, OmniOutput):
             text_hidden_states = hidden_states.text_hidden_states
             multimodal_outputs = hidden_states.multimodal_outputs
-        # // AIGC END
         elif isinstance(hidden_states, torch.Tensor):
             text_hidden_states = hidden_states
             multimodal_outputs = {}
@@ -664,7 +658,6 @@ class OmniGPUModelRunner(GPUModelRunner):
                     ubatch_slices=ubatch_slices_padded,
                 ),
             ):
-                # // AIGC START
                 # 使用缓存的标志，避免在 CUDA graph 热路径中调用 hasattr
                 if self._model_has_talker_mtp:
                     outputs = self.talker_mtp(
@@ -673,7 +666,6 @@ class OmniGPUModelRunner(GPUModelRunner):
                         self.last_talker_hidden.gpu[:num_tokens_padded],
                         self.text_step.gpu[:num_tokens_padded],
                     )
-                # // AIGC END
                 outputs = self.model(
                     input_ids=input_ids,
                     positions=positions,
@@ -839,22 +831,18 @@ class OmniGPUModelRunner(GPUModelRunner):
         try:
             # execute the custom postprocess function
             # TODO(Peiqi): do we have a more elegant way to do this?
-            # // AIGC START
             # 使用缓存的标志，避免在 CUDA graph 热路径中调用 hasattr
             if self._model_has_postprocess:
-                # // AIGC START
                 # Prefer batched postprocess if the model provides it (e.g. MiMo local decoding),
                 # while keeping backward compatibility with per-request postprocess().
                 if hasattr(self.model, "postprocess_batch"):
                     req_infos_list: list[dict] = []
-                    # // AIGC START
                     # Use the same req_ids order as when injecting sampled_token_id.
                     # In AR runner, sampled_token_id is injected using req_ids_output_copy,
                     # so we should use the same list here if available.
                     req_ids_to_use = getattr(self, "_current_req_ids_output_copy", None)
                     if req_ids_to_use is None:
                         req_ids_to_use = self.input_batch.req_ids
-                    # // AIGC END
                     for req_id in req_ids_to_use:
                         if self.model_config.async_chunk:
                             req_infos = self._get_additional_information(scheduler_output, req_id)
@@ -907,8 +895,6 @@ class OmniGPUModelRunner(GPUModelRunner):
                         hidden_states_slice = hidden_states[s:e]
                         update_dict = self.model.postprocess(hidden_states_slice, **req_infos)
                         self._merge_additional_information_update(req_id, update_dict)
-                # // AIGC END
-            # // AIGC END
         except Exception as e:
             logger.error(
                 f"Error merging for requests:{self.input_batch.req_ids} "
@@ -1086,7 +1072,6 @@ class OmniGPUModelRunner(GPUModelRunner):
             # Prefill: overlay prompt_embeds and collect additional_information
             self._collect_additional_information_for_prefill(num_scheduled_tokens_np)
 
-        # // AIGC START
         # 使用缓存的标志，避免在 CUDA graph 热路径中调用 hasattr
         if self._model_has_preprocess:
             # Overlay custom prompt_embeds per request for the prompt portion;
@@ -1141,7 +1126,6 @@ class OmniGPUModelRunner(GPUModelRunner):
             # 使用缓存的标志，避免在 CUDA graph 热路径中调用 hasattr
             if self._model_has_talker_mtp:
                 self._talker_mtp_forward(decode_req_ids, inputs_embeds)
-        # // AIGC END
 
         return (
             input_ids,
@@ -1205,11 +1189,9 @@ class OmniGPUModelRunner(GPUModelRunner):
             **model_kwargs,
             **model_kwargs_extra,
         )
-        # // AIGC START
         # 使用缓存的标志，避免在 CUDA graph 热路径中调用 hasattr
         if not isinstance(model_output, OmniOutput) and self._model_has_make_omni_output:
             model_output = self.model.make_omni_output(model_output, **model_kwargs_extra)
-        # // AIGC END
         # Cache model output so later sample_tokens can consume multimodal results.
         self._omni_last_model_output = model_output
         return model_output

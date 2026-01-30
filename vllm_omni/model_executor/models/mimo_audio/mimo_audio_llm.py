@@ -1019,13 +1019,11 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         inputs_embeds: torch.Tensor | None = None,
         **kwargs: object,
     ) -> torch.Tensor | IntermediateTensors:
-        # // AIGC START
         # Keep model forward CUDA-graph friendly: no Python dict/cache access,
         # no local decoding, and no sampled-token branching here.
         # Local decoding is triggered in runner postprocess_batch (graph-external).
         hidden_states = self.model(input_ids, positions, intermediate_tensors, inputs_embeds=inputs_embeds)
         return hidden_states
-        # // AIGC END
 
     def _update_request_caches(
         self,
