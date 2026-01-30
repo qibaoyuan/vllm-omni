@@ -1049,7 +1049,8 @@ class OmniGPUModelRunner(GPUModelRunner):
                     )
 
                 # mimo-audio check
-                req_infos = self._maybe_attach_mimo_audio_req_infos(req_state, req_infos, req_id)
+                if not self.vllm_config.model_config.async_chunk:
+                    req_infos = self._maybe_attach_mimo_audio_req_infos(req_state, req_infos, req_id)
 
                 start_offset = int(self.query_start_loc.cpu[req_index])
                 sched_tokens = int(num_scheduled_tokens_np[req_index])
