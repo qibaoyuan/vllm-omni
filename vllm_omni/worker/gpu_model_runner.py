@@ -39,15 +39,18 @@ class OmniGPUModelRunner(GPUModelRunner):
         self._omni_per_req_additional_information: dict[str, dict] | None = None
         self._omni_num_scheduled_tokens_np: np.ndarray | None = None
         self._omni_last_model_output: object | None = None
+        
         # 缓存模型属性检查结果，避免在 CUDA graph 热路径中重复调用 hasattr
         self._model_has_preprocess: bool = False
         self._model_has_postprocess: bool = False
         self._model_has_talker_mtp: bool = False
         self._model_has_make_omni_output: bool = False
         self._model_has_multimodal_outputs: bool = False
+        
 
     def load_model(self, *args, **kwargs) -> None:
         super().load_model(*args, **kwargs)
+        
         # 在初始化时缓存属性检查结果，避免在热路径中重复调用 hasattr
         self._model_has_preprocess = hasattr(self.model, "has_preprocess") and getattr(
             self.model, "has_preprocess", False
@@ -78,6 +81,7 @@ class OmniGPUModelRunner(GPUModelRunner):
             )
             self.last_talker_hidden = self._make_buffer(self.max_num_reqs, hidden_size, dtype=self.dtype, numpy=False)
             self.text_step = self._make_buffer(self.max_num_reqs, hidden_size, dtype=self.dtype, numpy=False)
+        
 
     def _init_mrope_positions(self, req_state: CachedRequestState):
         """Initialize M-RoPE positions for multimodal inputs.
@@ -411,10 +415,12 @@ class OmniGPUModelRunner(GPUModelRunner):
 
     @torch.inference_mode()
     def extract_multimodal_outputs(self, hidden_states: torch.Tensor | list[torch.Tensor] | OmniOutput) -> dict:
+        
         # 使用缓存的标志，避免在 CUDA graph 热路径中调用 hasattr
         if self._model_has_multimodal_outputs and isinstance(hidden_states, OmniOutput):
             text_hidden_states = hidden_states.text_hidden_states
             multimodal_outputs = hidden_states.multimodal_outputs
+        
         elif isinstance(hidden_states, torch.Tensor):
             text_hidden_states = hidden_states
             multimodal_outputs = {}
@@ -658,6 +664,7 @@ class OmniGPUModelRunner(GPUModelRunner):
                     ubatch_slices=ubatch_slices_padded,
                 ),
             ):
+                
                 # 使用缓存的标志，避免在 CUDA graph 热路径中调用 hasattr
                 if self._model_has_talker_mtp:
                     outputs = self.talker_mtp(
@@ -666,6 +673,7 @@ class OmniGPUModelRunner(GPUModelRunner):
                         self.last_talker_hidden.gpu[:num_tokens_padded],
                         self.text_step.gpu[:num_tokens_padded],
                     )
+                
                 outputs = self.model(
                     input_ids=input_ids,
                     positions=positions,
@@ -831,70 +839,13 @@ class OmniGPUModelRunner(GPUModelRunner):
         try:
             # execute the custom postprocess function
             # TODO(Peiqi): do we have a more elegant way to do this?
+            
             # 使用缓存的标志，避免在 CUDA graph 热路径中调用 hasattr
             if self._model_has_postprocess:
-                # Prefer batched postprocess if the model provides it (e.g. MiMo local decoding),
-                # while keeping backward compatibility with per-request postprocess().
-                if hasattr(self.model, "postprocess_batch"):
-                    req_infos_list: list[dict] = []
-                    # Use the same req_ids order as when injecting sampled_token_id.
-                    # In AR runner, sampled_token_id is injected using req_ids_output_copy,
-                    # so we should use the same list here if available.
-                    req_ids_to_use = getattr(self, "_current_req_ids_output_copy", None)
-                    if req_ids_to_use is None:
-                        req_ids_to_use = self.input_batch.req_ids
-                    for req_id in req_ids_to_use:
-                        if self.model_config.async_chunk:
-                            req_infos = self._get_additional_information(scheduler_output, req_id)
-                        else:
-                            req_state = self.requests.get(req_id)
-                            req_infos = (
-                                getattr(req_state, "additional_information_cpu", None)
-                                if req_state is not None
-                                else None
-                            )
-                        if not isinstance(req_infos, dict):
-                            req_infos = {}
-                        req_infos_list.append(req_infos)
-
-                    updates = self.model.postprocess_batch(
-                        hidden_states=hidden_states,
-                        req_infos_list=req_infos_list,
-                        query_start_loc=self.query_start_loc.cpu,
-                        num_scheduled_tokens_np=num_scheduled_tokens_np,
-                    )
-
-                    # updates can be:
-                    # - dict[req_id, dict]
-                    # - list[dict] aligned with self.input_batch.req_ids
-                    if isinstance(updates, dict):
-                        for req_id, upd in updates.items():
-                            if isinstance(upd, dict):
-                                self._merge_additional_information_update(req_id, upd)
-                    elif isinstance(updates, list):
-                        for req_id, upd in zip(self.input_batch.req_ids, updates):
-                            if isinstance(upd, dict):
-                                self._merge_additional_information_update(req_id, upd)
-                else:
-                    for req_index, req_id in enumerate(self.input_batch.req_ids):
-                        if self.model_config.async_chunk:
-                            req_infos = self._get_additional_information(scheduler_output, req_id)
-                        else:
-                            req_state = self.requests.get(req_id)
-                            req_infos = (
-                                getattr(req_state, "additional_information_cpu", None)
-                                if req_state is not None
-                                else None
-                            )
-                        if not isinstance(req_infos, dict):
-                            req_infos = {}
-                        start_offset = int(self.query_start_loc.cpu[req_index])
-                        sched_tokens = int(num_scheduled_tokens_np[req_index])
-                        s, e = start_offset, start_offset + sched_tokens
-                        # only consider to store data into update dict.
-                        hidden_states_slice = hidden_states[s:e]
-                        update_dict = self.model.postprocess(hidden_states_slice, **req_infos)
-                        self._merge_additional_information_update(req_id, update_dict)
+                self._run_mimo_postprocess(
+                    hidden_states, num_scheduled_tokens_np, scheduler_output
+                )
+            
         except Exception as e:
             logger.error(
                 f"Error merging for requests:{self.input_batch.req_ids} "
@@ -904,6 +855,83 @@ class OmniGPUModelRunner(GPUModelRunner):
             import traceback
 
             traceback.print_exc()
+
+    def _run_mimo_postprocess(
+        self,
+        hidden_states: torch.Tensor,
+        num_scheduled_tokens_np: np.ndarray,
+        scheduler_output: "SchedulerOutput",
+    ) -> None:
+        """Execute postprocess logic for models that support it (e.g. MiMoAudio)."""
+        
+        if self.model.__class__.__name__ != "MiMoAudioForConditionalGeneration":
+            return
+
+        # Prefer batched postprocess if the model provides it (e.g. MiMo local decoding),
+        # while keeping backward compatibility with per-request postprocess().
+        if hasattr(self.model, "postprocess_batch"):
+            req_infos_list: list[dict] = []
+            
+            # Use the same req_ids order as when injecting sampled_token_id.
+            # In AR runner, sampled_token_id is injected using req_ids_output_copy,
+            # so we should use the same list here if available.
+            req_ids_to_use = getattr(self, "_current_req_ids_output_copy", None)
+            if req_ids_to_use is None:
+                req_ids_to_use = self.input_batch.req_ids
+            
+            for req_id in req_ids_to_use:
+                if self.model_config.async_chunk:
+                    req_infos = self._get_additional_information(scheduler_output, req_id)
+                else:
+                    req_state = self.requests.get(req_id)
+                    req_infos = (
+                        getattr(req_state, "additional_information_cpu", None)
+                        if req_state is not None
+                        else None
+                    )
+                if not isinstance(req_infos, dict):
+                    req_infos = {}
+                req_infos_list.append(req_infos)
+
+            updates = self.model.postprocess_batch(
+                hidden_states=hidden_states,
+                req_infos_list=req_infos_list,
+                query_start_loc=self.query_start_loc.cpu,
+                num_scheduled_tokens_np=num_scheduled_tokens_np,
+            )
+
+            # updates can be:
+            # - dict[req_id, dict]
+            # - list[dict] aligned with self.input_batch.req_ids
+            if isinstance(updates, dict):
+                for req_id, upd in updates.items():
+                    if isinstance(upd, dict):
+                        self._merge_additional_information_update(req_id, upd)
+            elif isinstance(updates, list):
+                for req_id, upd in zip(self.input_batch.req_ids, updates):
+                    if isinstance(upd, dict):
+                        self._merge_additional_information_update(req_id, upd)
+        else:
+            for req_index, req_id in enumerate(self.input_batch.req_ids):
+                if self.model_config.async_chunk:
+                    req_infos = self._get_additional_information(scheduler_output, req_id)
+                else:
+                    req_state = self.requests.get(req_id)
+                    req_infos = (
+                        getattr(req_state, "additional_information_cpu", None)
+                        if req_state is not None
+                        else None
+                    )
+                if not isinstance(req_infos, dict):
+                    req_infos = {}
+                start_offset = int(self.query_start_loc.cpu[req_index])
+                sched_tokens = int(num_scheduled_tokens_np[req_index])
+                s, e = start_offset, start_offset + sched_tokens
+                # only consider to store data into update dict.
+                hidden_states_slice = hidden_states[s:e]
+                update_dict = self.model.postprocess(hidden_states_slice, **req_infos)
+                self._merge_additional_information_update(req_id, update_dict)
+        
 
     def _collect_additional_information_for_prefill(
         self,
@@ -1072,6 +1100,7 @@ class OmniGPUModelRunner(GPUModelRunner):
             # Prefill: overlay prompt_embeds and collect additional_information
             self._collect_additional_information_for_prefill(num_scheduled_tokens_np)
 
+        
         # 使用缓存的标志，避免在 CUDA graph 热路径中调用 hasattr
         if self._model_has_preprocess:
             # Overlay custom prompt_embeds per request for the prompt portion;
@@ -1126,6 +1155,7 @@ class OmniGPUModelRunner(GPUModelRunner):
             # 使用缓存的标志，避免在 CUDA graph 热路径中调用 hasattr
             if self._model_has_talker_mtp:
                 self._talker_mtp_forward(decode_req_ids, inputs_embeds)
+        
 
         return (
             input_ids,
@@ -1189,9 +1219,11 @@ class OmniGPUModelRunner(GPUModelRunner):
             **model_kwargs,
             **model_kwargs_extra,
         )
+        
         # 使用缓存的标志，避免在 CUDA graph 热路径中调用 hasattr
         if not isinstance(model_output, OmniOutput) and self._model_has_make_omni_output:
             model_output = self.model.make_omni_output(model_output, **model_kwargs_extra)
+        
         # Cache model output so later sample_tokens can consume multimodal results.
         self._omni_last_model_output = model_output
         return model_output
