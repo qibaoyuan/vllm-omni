@@ -19,6 +19,7 @@ from vllm.v1.worker.gpu_model_runner import GPUModelRunner, IntermediateTensors,
 from vllm.v1.worker.ubatch_utils import maybe_create_ubatch_slices
 
 from vllm_omni.model_executor.models.output_templates import OmniOutput
+from vllm_omni.worker import mimo_utils
 
 if TYPE_CHECKING:
     from vllm.v1.core.sched.output import SchedulerOutput
@@ -65,6 +66,7 @@ class OmniGPUModelRunner(GPUModelRunner):
         self._model_has_multimodal_outputs = hasattr(self.model, "have_multimodal_outputs") and getattr(
             self.model, "have_multimodal_outputs", False
         )
+        
         # TODO move this model specific logic to a separate class
         if self._model_has_talker_mtp:
             self.talker_mtp = self.model.talker_mtp
@@ -841,10 +843,17 @@ class OmniGPUModelRunner(GPUModelRunner):
             # TODO(Peiqi): do we have a more elegant way to do this?
             
             # 使用缓存的标志，避免在 CUDA graph 热路径中调用 hasattr
+            logger.debug(f"[MiMo] _process_additional_information_updates: _model_has_postprocess={self._model_has_postprocess}, req_ids={self.input_batch.req_ids[:3] if self.input_batch.req_ids else []}")
             if self._model_has_postprocess:
-                self._run_mimo_postprocess(
-                    hidden_states, num_scheduled_tokens_np, scheduler_output
+                # 将 MiMo 相关后处理逻辑集中到 mimo_utils，runner 直接调用，减少中转函数。
+                mimo_utils.run_postprocess(
+                    runner=self,
+                    hidden_states=hidden_states,
+                    num_scheduled_tokens_np=num_scheduled_tokens_np,
+                    scheduler_output=scheduler_output,
                 )
+            else:
+                logger.warning(f"[MiMo] _model_has_postprocess=False, skipping postprocess. Model class: {self.model.__class__.__name__}")
             
         except Exception as e:
             logger.error(
@@ -855,83 +864,6 @@ class OmniGPUModelRunner(GPUModelRunner):
             import traceback
 
             traceback.print_exc()
-
-    def _run_mimo_postprocess(
-        self,
-        hidden_states: torch.Tensor,
-        num_scheduled_tokens_np: np.ndarray,
-        scheduler_output: "SchedulerOutput",
-    ) -> None:
-        """Execute postprocess logic for models that support it (e.g. MiMoAudio)."""
-        
-        if self.model.__class__.__name__ != "MiMoAudioForConditionalGeneration":
-            return
-
-        # Prefer batched postprocess if the model provides it (e.g. MiMo local decoding),
-        # while keeping backward compatibility with per-request postprocess().
-        if hasattr(self.model, "postprocess_batch"):
-            req_infos_list: list[dict] = []
-            
-            # Use the same req_ids order as when injecting sampled_token_id.
-            # In AR runner, sampled_token_id is injected using req_ids_output_copy,
-            # so we should use the same list here if available.
-            req_ids_to_use = getattr(self, "_current_req_ids_output_copy", None)
-            if req_ids_to_use is None:
-                req_ids_to_use = self.input_batch.req_ids
-            
-            for req_id in req_ids_to_use:
-                if self.model_config.async_chunk:
-                    req_infos = self._get_additional_information(scheduler_output, req_id)
-                else:
-                    req_state = self.requests.get(req_id)
-                    req_infos = (
-                        getattr(req_state, "additional_information_cpu", None)
-                        if req_state is not None
-                        else None
-                    )
-                if not isinstance(req_infos, dict):
-                    req_infos = {}
-                req_infos_list.append(req_infos)
-
-            updates = self.model.postprocess_batch(
-                hidden_states=hidden_states,
-                req_infos_list=req_infos_list,
-                query_start_loc=self.query_start_loc.cpu,
-                num_scheduled_tokens_np=num_scheduled_tokens_np,
-            )
-
-            # updates can be:
-            # - dict[req_id, dict]
-            # - list[dict] aligned with self.input_batch.req_ids
-            if isinstance(updates, dict):
-                for req_id, upd in updates.items():
-                    if isinstance(upd, dict):
-                        self._merge_additional_information_update(req_id, upd)
-            elif isinstance(updates, list):
-                for req_id, upd in zip(self.input_batch.req_ids, updates):
-                    if isinstance(upd, dict):
-                        self._merge_additional_information_update(req_id, upd)
-        else:
-            for req_index, req_id in enumerate(self.input_batch.req_ids):
-                if self.model_config.async_chunk:
-                    req_infos = self._get_additional_information(scheduler_output, req_id)
-                else:
-                    req_state = self.requests.get(req_id)
-                    req_infos = (
-                        getattr(req_state, "additional_information_cpu", None)
-                        if req_state is not None
-                        else None
-                    )
-                if not isinstance(req_infos, dict):
-                    req_infos = {}
-                start_offset = int(self.query_start_loc.cpu[req_index])
-                sched_tokens = int(num_scheduled_tokens_np[req_index])
-                s, e = start_offset, start_offset + sched_tokens
-                # only consider to store data into update dict.
-                hidden_states_slice = hidden_states[s:e]
-                update_dict = self.model.postprocess(hidden_states_slice, **req_infos)
-                self._merge_additional_information_update(req_id, update_dict)
-        
 
     def _collect_additional_information_for_prefill(
         self,
@@ -1116,7 +1048,7 @@ class OmniGPUModelRunner(GPUModelRunner):
                         getattr(req_state, "additional_information_cpu", None) if req_state is not None else None
                     )
 
-                if req_state is not None and self.model.__class__.__name__ == "MiMoAudioForConditionalGeneration":
+                if req_state is not None and mimo_utils.is_mimo_audio_model(self.model):
                     req_infos = dict(req_infos) if isinstance(req_infos, dict) else {}
                     mm_features = getattr(req_state, "mm_features", None)
                     if mm_features and (not req_infos.get("mm_features")):

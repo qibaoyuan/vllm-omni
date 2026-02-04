@@ -38,6 +38,7 @@ from vllm.v1.worker.utils import is_residual_scattered_for_sp
 from vllm_omni.core.sched.omni_ar_scheduler import KVCacheTransferData
 from vllm_omni.outputs import OmniModelRunnerOutput
 from vllm_omni.worker.gpu_model_runner import OmniGPUModelRunner
+from vllm_omni.worker import mimo_utils
 
 logger = init_logger(__name__)
 
@@ -364,129 +365,6 @@ class GPUARModelRunner(OmniGPUModelRunner):
 
         return None
 
-    
-    def _inject_mimo_sampled_token_ids(
-        self,
-        valid_sampled_token_ids: torch.Tensor | list | tuple | None,
-        req_ids_output_copy: list[str],
-        req_id_to_index_output_copy: dict[str, int],
-        sampler_output: Any,
-    ) -> bool:
-        """仅针对 MiMoAudio: 将 sampled_token_id / request_id 注入到每个请求的 additional_information_cpu 中。
-
-        目的：让 model.postprocess(_batch) 能根据 sampled_token_id 决定是否执行本地解码等逻辑。
-        非 MiMoAudio 模型直接返回 False，不影响主流程。
-        """
-        if self.model.__class__.__name__ != "MiMoAudioForConditionalGeneration":
-            return False
-
-        sampled_token_ids_list: list[int] = []
-
-        # Debug: print valid_sampled_token_ids to understand its structure
-        # print(f"[AR] valid_sampled_token_ids type={type(valid_sampled_token_ids)}, value={valid_sampled_token_ids}")
-
-        if valid_sampled_token_ids is None:
-            # print(f"[AR] WARNING: valid_sampled_token_ids is None! Trying sampler_output.sampled_token_ids as fallback")
-            # Fallback to sampler_output.sampled_token_ids if valid_sampled_token_ids is None
-            if hasattr(self, "execute_model_state") and self.execute_model_state is not None:
-                # Try to get from the most recent sampler_output
-                pass  # We'll handle this below
-        elif isinstance(valid_sampled_token_ids, torch.Tensor):
-            sampled_token_ids_list = [int(t) for t in valid_sampled_token_ids.tolist()]
-            # print(f"[AR] Parsed from Tensor: sampled_token_ids_list={sampled_token_ids_list}")
-        elif isinstance(valid_sampled_token_ids, (list, tuple)):
-            for t in valid_sampled_token_ids:
-                if isinstance(t, (list, tuple)) and t:
-                    sampled_token_ids_list.append(int(t[0]))
-                elif isinstance(t, (list, tuple)):
-                    continue
-                else:
-                    sampled_token_ids_list.append(int(t))
-            # print(f"[AR] Parsed from list/tuple: sampled_token_ids_list={sampled_token_ids_list}")
-        else:
-            # print(f"[AR] WARNING: valid_sampled_token_ids is unexpected type: {type(valid_sampled_token_ids)}")
-            pass
-
-        # If sampled_token_ids_list is still empty, try to get from sampler_output.sampled_token_ids
-        if len(sampled_token_ids_list) == 0 and len(req_ids_output_copy) > 0:
-            # print(f"[AR] sampled_token_ids_list is empty, trying sampler_output.sampled_token_ids as fallback")
-            if hasattr(sampler_output, "sampled_token_ids") and sampler_output.sampled_token_ids is not None:
-                if isinstance(sampler_output.sampled_token_ids, torch.Tensor):
-                    # Map to req_ids_output_copy using req_id_to_index_output_copy
-                    for rid in req_ids_output_copy:
-                        idx = req_id_to_index_output_copy.get(rid)
-                        if idx is not None and idx < len(sampler_output.sampled_token_ids):
-                            token_id = int(sampler_output.sampled_token_ids[idx].item())
-                            sampled_token_ids_list.append(token_id)
-                            # print(f"[AR] Got token_id={token_id} for req_id={rid} from sampler_output")
-                        else:
-                            # print(f"[AR] WARNING: Cannot map req_id={rid} to sampled_token_ids (idx={idx})")
-                            sampled_token_ids_list.append(None)
-                else:
-                    # print(f"[AR] sampler_output.sampled_token_ids is not a Tensor: {type(sampler_output.sampled_token_ids)}")
-                    pass
-            else:
-                # print(f"[AR] sampler_output.sampled_token_ids is not available")
-                pass
-                # Set None for all requests as placeholder
-                sampled_token_ids_list = [None] * len(req_ids_output_copy)
-
-        # Debug: print req_ids to verify matching
-        # print(f"[AR] Injecting sampled_token_id: req_ids_output_copy={req_ids_output_copy}, input_batch.req_ids={self.input_batch.req_ids}")
-        # print(f"[AR] sampled_token_ids_list length={len(sampled_token_ids_list)}, req_ids_output_copy length={len(req_ids_output_copy)}")
-
-        for rid, token_id in zip(req_ids_output_copy, sampled_token_ids_list):
-            req_state = self.requests.get(rid)
-            if req_state is None:
-                # print(f"[AR] WARNING: req_state is None for rid={rid}")
-                continue
-            info = getattr(req_state, "additional_information_cpu", None)
-            if not isinstance(info, dict):
-                info = {}
-            # Handle None token_id (from fallback)
-            if token_id is not None:
-                info["sampled_token_id"] = int(token_id)
-                # print(f"[AR] Injected sampled_token_id={int(token_id)} for rid={rid}")
-            else:
-                info["sampled_token_id"] = None
-                # print(f"[AR] Injected sampled_token_id=None for rid={rid} (fallback)")
-            info["request_id"] = rid
-            # Keep a stable key name used by MiMo path.
-            info["req_id"] = rid
-            setattr(req_state, "additional_information_cpu", info)
-
-        # Also ensure all requests in input_batch have sampled_token_id injected
-        # (in case req_ids_output_copy and input_batch.req_ids differ)
-        for req_id in self.input_batch.req_ids:
-            if req_id not in req_ids_output_copy:
-                # This request was filtered out, but we still need to set a placeholder
-                req_state = self.requests.get(req_id)
-                if req_state is not None:
-                    info = getattr(req_state, "additional_information_cpu", None)
-                    if not isinstance(info, dict):
-                        info = {}
-                    # Mark as None to indicate this request was filtered
-                    if "sampled_token_id" not in info:
-                        info["sampled_token_id"] = None
-                    info["request_id"] = req_id
-                    info["req_id"] = req_id
-                    setattr(req_state, "additional_information_cpu", info)
-                    # print(f"[AR] Set placeholder sampled_token_id=None for filtered req_id={req_id}")
-            else:
-                # Verify injection was successful
-                req_state = self.requests.get(req_id)
-                if req_state is not None:
-                    info = getattr(req_state, "additional_information_cpu", None)
-                    if isinstance(info, dict) and "sampled_token_id" in info:
-                        # print(f"[AR] Verified: req_id={req_id} has sampled_token_id={info.get('sampled_token_id')}")
-                        pass
-                    else:
-                        # print(f"[AR] ERROR: req_id={req_id} missing sampled_token_id after injection!")
-                        pass
-
-        return True
-    
-
     @torch.inference_mode()
     def sample_tokens(
         self,
@@ -622,11 +500,12 @@ class GPUARModelRunner(OmniGPUModelRunner):
             )
 
         
-        did_inject_mimo = self._inject_mimo_sampled_token_ids(
-            valid_sampled_token_ids,
-            req_ids_output_copy,
-            req_id_to_index_output_copy,
-            sampler_output,
+        did_inject_mimo = mimo_utils.inject_sampled_token_ids(
+            runner=self,
+            valid_sampled_token_ids=valid_sampled_token_ids,
+            req_ids_output_copy=req_ids_output_copy,
+            req_id_to_index_output_copy=req_id_to_index_output_copy,
+            sampler_output=sampler_output,
         )
         
 
@@ -681,7 +560,7 @@ class GPUARModelRunner(OmniGPUModelRunner):
             
             # 仅对 MiMoAudio: 将 postprocess 生成的 codec code 放入 pooler_output，
             # 供下游 stage_input_processor 读取 output.multimodal_output["code"]。
-            if self.model.__class__.__name__ == "MiMoAudioForConditionalGeneration":
+            if mimo_utils.is_mimo_audio_model(self.model):
                 req_state = self.requests.get(rid)
                 if req_state is not None:
                     info = getattr(req_state, "additional_information_cpu", None)
@@ -689,6 +568,8 @@ class GPUARModelRunner(OmniGPUModelRunner):
                         code = info.get("code")
                         if code is not None:
                             payload["code"] = code
+                        else:
+                            logger.debug(f"[MiMo] No code in additional_information_cpu for req_id={rid}, keys={list(info.keys())}")
             
 
             pooler_output.append(payload)
