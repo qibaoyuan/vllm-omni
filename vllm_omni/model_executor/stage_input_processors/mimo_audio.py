@@ -48,6 +48,70 @@ def prepend_and_flatten_colmajor(x: torch.Tensor, pad_vec: torch.Tensor) -> torc
     return y_col_major
 
 
+def llm2code2wav_async_chunk(connector: Any, pooling_output: dict[str, Any], request: Any) -> dict[str, Any] | None:
+    """
+    Async chunk version: convert stage-0 pooling_output to code2wav payload (pooling / connector accumulation).
+
+    Accumulates codes in connector per request_id,
+    returns payload only when chunk_size is full or request is finished; returns None when waiting.
+    """
+    if "code_predictor_codes" not in pooling_output:
+        return None
+
+    code_predictor_codes = pooling_output["code_predictor_codes"]
+    
+    if code_predictor_codes is None:
+        return None
+    if isinstance(code_predictor_codes, torch.Tensor):
+        if code_predictor_codes.numel() == 0:
+            return None
+    elif hasattr(code_predictor_codes, "__len__"):
+        if len(code_predictor_codes) == 0:
+            return None
+
+    if isinstance(code_predictor_codes, torch.Tensor):
+        if not code_predictor_codes.any():
+            return None
+        code_tensor = code_predictor_codes.to(torch.long)
+    else:
+        code_tensor = torch.tensor(code_predictor_codes, dtype=torch.long)
+        if not code_tensor.any():
+            return None
+
+    if code_tensor.ndim == 3:
+        code_tensor = code_tensor.unsqueeze(0)
+    if code_tensor.ndim != 4 or code_tensor.shape[-2:] != (8, 4):
+        return None
+
+    pad_vec = torch.tensor([151667, 151667, 151667, 151667], device=code_tensor.device, dtype=code_tensor.dtype)
+    code_final = prepend_and_flatten_colmajor(code_tensor, pad_vec)
+    code_list = code_final.tolist()
+    if sum(code_list) == 0:
+        return None
+
+    request_id = getattr(request, "external_req_id", None)
+    if request_id is None:
+        return None
+
+    chunk_size = left_context_size = 5
+    connector.code_prompt_token_ids[request_id].append(code_list)
+    length = len(connector.code_prompt_token_ids[request_id])
+    chunk_length = length % chunk_size
+    if chunk_length != 0 and not request.is_finished():
+        return None
+
+    context_length = chunk_length if chunk_length != 0 else chunk_size
+    end_index = min(length, left_context_size + context_length)
+
+    info = {
+        "code_predictor_codes": (
+            torch.tensor(connector.code_prompt_token_ids[request_id][-end_index:]).reshape(-1).tolist()
+        ),
+        "finished": torch.tensor(request.is_finished(), dtype=torch.bool),
+    }
+    return info
+
+
 def llm2code2wav(
     stage_list: list[Any],
     engine_input_source: list[int],
@@ -90,8 +154,8 @@ def llm2code2wav(
 
         # Extract codec codes from talker output
         # Expected shape: [8, seq_len] (8-layer RVQ codes)
-        if "code" in output.multimodal_output:
-            codec_codes = output.multimodal_output["code"].to(torch.long)  # [seq_batch_size, 1, 8, 4]
+        if "code_predictor_codes" in output.multimodal_output:
+            codec_codes = output.multimodal_output["code_predictor_codes"].to(torch.long)  # [seq_batch_size, 1, 8, 4]
             is_all_zero = (codec_codes == 0).all(dim=(1, 2, 3))
             non_zero_indices = (~is_all_zero).nonzero(as_tuple=True)[0]
             if len(non_zero_indices) == 0:
@@ -105,7 +169,7 @@ def llm2code2wav(
             else:
                 if len(non_zero_indices) < codec_codes.shape[0]:
                     codec_codes = codec_codes[non_zero_indices]
-        elif "latent" in output.multimodal_output and "code" not in output.multimodal_output:
+        elif "latent" in output.multimodal_output and "code_predictor_codes" not in output.multimodal_output:
             codec_codes = torch.zeros(1, 1, 8, 4, dtype=torch.long)
         else:
             raise ValueError(f"Invalid multimodal_output: {output.multimodal_output}")

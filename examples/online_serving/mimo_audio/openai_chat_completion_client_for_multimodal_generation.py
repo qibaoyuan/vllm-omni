@@ -1,4 +1,5 @@
 import base64
+import concurrent.futures
 import json
 import os
 from typing import Any
@@ -10,7 +11,7 @@ from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 # Modify OpenAI's API key and API base to use vLLM's API server.
 openai_api_key = "EMPTY"
-openai_api_base = "http://localhost:8091/v1"
+openai_api_base = "http://localhost:18091/v1"
 
 client = OpenAI(
     # defaults to os.environ.get("OPENAI_API_KEY")
@@ -320,30 +321,62 @@ def run_multimodal_generation(args) -> None:
         # Optional, it has a default setting in stage_configs of the corresponding model.
     }
 
-    # Build messages list
+    # Build messages list (filter None so concurrent tasks get valid structure)
+    system = get_system_prompt(message_json_path=message_json_path)
     if args.query_type == "multi_audios" and isinstance(prompt, list):
-        messages = [get_system_prompt(message_json_path=message_json_path)] + prompt
+        messages = ([system] if system else []) + prompt
     elif args.query_type == "text":
         messages = [prompt]
 
-    chat_completion = client.chat.completions.create(
-        messages=messages,
-        model=model_name,
-        extra_body=extra_body,
-    )
+    num_concurrent_requests = args.num_concurrent_requests
 
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_concurrent_requests) as executor:
+        futures = [
+            executor.submit(
+                client.chat.completions.create,
+                messages=messages,
+                model=model_name,
+                extra_body=extra_body,
+                stream=args.stream,
+            )
+            for _ in range(num_concurrent_requests)
+        ]
+        chat_completions = [future.result() for future in concurrent.futures.as_completed(futures)]
+
+    assert len(chat_completions) == num_concurrent_requests
     count = 0
-    for choice in chat_completion.choices:
-        if choice.message.audio:
-            audio_data = base64.b64decode(choice.message.audio.data)
-            audio_file_path = f"{output_audio_path}/{args.query_type}/audio_{count}.wav"
-            os.makedirs(os.path.dirname(audio_file_path), exist_ok=True)
-            with open(audio_file_path, "wb") as f:
-                f.write(audio_data)
-            print(f"Audio saved to {audio_file_path}")
-            count += 1
-        elif choice.message.content:
-            print("Chat completion output from text:", choice.message.content)
+    if not args.stream:
+        for chat_completion in chat_completions:
+            for choice in chat_completion.choices:
+                if choice.message.audio:
+                    audio_data = base64.b64decode(choice.message.audio.data)
+                    audio_file_path = f"{output_audio_path}/{args.query_type}/audio_{count}.wav"
+                    os.makedirs(os.path.dirname(audio_file_path), exist_ok=True)
+                    with open(audio_file_path, "wb") as f:
+                        f.write(audio_data)
+                    print(f"Audio saved to {audio_file_path}")
+                    count += 1
+                elif choice.message.content:
+                    print("Chat completion output from text:", choice.message.content)
+    else:
+        printed_content = False
+        for chat_completion in chat_completions:
+            for chunk in chat_completion:
+                for choice in chunk.choices:
+                    content = getattr(choice.delta, "content", None)
+                    if getattr(chunk, "modality", None) == "audio" and content:
+                        audio_data = base64.b64decode(content)
+                        audio_file_path = f"{output_audio_path}/{args.query_type}/audio_{count}.wav"
+                        os.makedirs(os.path.dirname(audio_file_path), exist_ok=True)
+                        with open(audio_file_path, "wb") as f:
+                            f.write(audio_data)
+                        print(f"\nAudio saved to {audio_file_path}")
+                        count += 1
+                    elif getattr(chunk, "modality", None) == "text" and content:
+                        if not printed_content:
+                            printed_content = True
+                            print("\ncontent:", end="", flush=True)
+                        print(content, end="", flush=True)
 
 
 def parse_args():
@@ -377,6 +410,17 @@ def parse_args():
         type=str,
         default="./",
         help="Path to save the generated audio files.",
+    )
+    parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="Stream the response.",
+    )
+    parser.add_argument(
+        "--num-concurrent-requests",
+        type=int,
+        default=1,
+        help="Number of concurrent requests to send. Default is 1.",
     )
 
     return parser.parse_args()

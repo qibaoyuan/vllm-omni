@@ -33,7 +33,7 @@ from vllm.multimodal.processing import (
     PromptUpdate,
     PromptUpdateDetails,
 )
-from vllm.multimodal.profiling import BaseDummyInputsBuilder, ProcessorInputs
+from vllm.multimodal.processing import BaseDummyInputsBuilder, ProcessorInputs
 from vllm.multimodal.utils import group_mm_kwargs_by_modality
 from vllm.sequence import IntermediateTensors
 from vllm.utils.cache import LRUCache
@@ -812,7 +812,7 @@ class MiMoAudioForConditionalGeneration(
 
             return OmniOutput(
                 text_hidden_states=text_hidden_states.reshape(-1, text_hidden_states.shape[-1]),
-                multimodal_outputs={"code": next_speech_tokens},
+                multimodal_outputs={"code_predictor_codes": next_speech_tokens},
             )
 
         if self.model_stage == "code2wav":
@@ -827,7 +827,10 @@ class MiMoAudioForConditionalGeneration(
             )
 
             audio_tensor = self.generate_audio(code)
-            return OmniOutput(text_hidden_states=None, multimodal_outputs={"audio": audio_tensor})
+            return OmniOutput(
+                text_hidden_states=None, 
+                multimodal_outputs={"model_outputs": audio_tensor.reshape(1, -1)},
+            )
 
     def generate_codes(
         self,

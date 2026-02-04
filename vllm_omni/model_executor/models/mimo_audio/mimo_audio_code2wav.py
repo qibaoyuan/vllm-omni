@@ -401,6 +401,13 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
             config_path=self.tokenizer_config_path,
             audio_tokenizer_path=self.audio_tokenizer_path,
         )
+        # samples per codec frame for streaming context strip (same as tokenizer frames_per_token)
+        audio_tokenizer_config = self._tokenizer_service.audio_tokenizer.config
+        self.total_upsample = (
+            getattr(audio_tokenizer_config, "avg_pooler", 2)
+            * getattr(audio_tokenizer_config, "stride_size", 2)
+            * getattr(audio_tokenizer_config, "hop_length", 240)
+        ) * self.config.group_size
 
     def load_weights(
         self,
@@ -410,6 +417,33 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
     ) -> set[str]:
         # Decoder has no trainable weights to load in this stage.
         return set()
+
+    def chunked_decode_streaming(
+        self,
+        codes: torch.Tensor,
+        chunk_size: int = 5,
+        left_context_size: int = 5,
+    ) -> torch.Tensor:
+        """
+        Decode one chunk of codes and return waveform with left context removed.
+
+        Used when async_chunk is True: each chunk is decoded and we strip
+        context_size * total_upsample samples from the start (left context).
+        """
+        wav_chunk = self._decode_waveform_from_codes(codes)
+        if wav_chunk.numel() == 0:
+            return wav_chunk
+        # Infer number of codec frames: flat format has 36 elements per frame (9*4 with prepend)
+        num_flat = codes.numel() if codes.ndim == 1 else codes.shape[-1]
+        num_chunks = num_flat // 36
+        if num_chunks <= chunk_size:
+            context_size = 0
+        else:
+            context_size = left_context_size
+        drop = context_size * self.total_upsample
+        if drop >= wav_chunk.numel():
+            return wav_chunk[:0].clone()
+        return wav_chunk[drop:].contiguous()
 
     def forward(
         self,
@@ -426,7 +460,12 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
         if code_tensor.numel() == 0:
             raise ValueError("code_tensor is empty.")
 
-        waveform = self._decode_waveform_from_codes(code_tensor)
+        if getattr(self.vllm_config.model_config, "async_chunk", False):
+            waveform = self.chunked_decode_streaming(
+                code_tensor, chunk_size=5, left_context_size=5
+            )
+        else:
+            waveform = self._decode_waveform_from_codes(code_tensor)
 
         # For warmup/dummy run: if waveform is empty, return dummy hidden_states
         # _dummy_run expects a tensor that can be processed by extract_multimodal_outputs
