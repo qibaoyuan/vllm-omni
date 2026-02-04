@@ -59,7 +59,7 @@ def llm2code2wav_async_chunk(connector: Any, pooling_output: dict[str, Any], req
         return None
 
     code_predictor_codes = pooling_output["code_predictor_codes"]
-    
+
     if code_predictor_codes is None:
         return None
     if isinstance(code_predictor_codes, torch.Tensor):

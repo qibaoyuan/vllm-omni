@@ -27,13 +27,14 @@ from vllm.multimodal.inputs import (
 )
 from vllm.multimodal.parse import AudioProcessorItems, MultiModalDataItems, MultiModalDataParser
 from vllm.multimodal.processing import (
+    BaseDummyInputsBuilder,
     BaseMultiModalProcessor,
     BaseProcessingInfo,
+    ProcessorInputs,
     PromptReplacement,
     PromptUpdate,
     PromptUpdateDetails,
 )
-from vllm.multimodal.processing import BaseDummyInputsBuilder, ProcessorInputs
 from vllm.multimodal.utils import group_mm_kwargs_by_modality
 from vllm.sequence import IntermediateTensors
 from vllm.utils.cache import LRUCache
@@ -828,7 +829,7 @@ class MiMoAudioForConditionalGeneration(
 
             audio_tensor = self.generate_audio(code)
             return OmniOutput(
-                text_hidden_states=None, 
+                text_hidden_states=None,
                 multimodal_outputs={"model_outputs": audio_tensor.reshape(1, -1)},
             )
 

@@ -461,9 +461,7 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
             raise ValueError("code_tensor is empty.")
 
         if getattr(self.vllm_config.model_config, "async_chunk", False):
-            waveform = self.chunked_decode_streaming(
-                code_tensor, chunk_size=5, left_context_size=5
-            )
+            waveform = self.chunked_decode_streaming(code_tensor, chunk_size=5, left_context_size=5)
         else:
             waveform = self._decode_waveform_from_codes(code_tensor)
 
