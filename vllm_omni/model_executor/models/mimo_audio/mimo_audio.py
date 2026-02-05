@@ -829,8 +829,8 @@ class MiMoAudioForConditionalGeneration(
 
             audio_tensor = self.generate_audio(code)
             return OmniOutput(
-                text_hidden_states=None,
-                multimodal_outputs={"model_outputs": audio_tensor.reshape(1, -1)},
+                text_hidden_states=None, 
+                multimodal_outputs={"model_outputs": audio_tensor.reshape(1, -1) if audio_tensor is not None else audio_tensor},
             )
 
     def generate_codes(
