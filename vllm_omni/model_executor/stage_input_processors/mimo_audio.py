@@ -48,6 +48,11 @@ def prepend_and_flatten_colmajor(x: torch.Tensor, pad_vec: torch.Tensor) -> torc
     return y_col_major
 
 
+def _make_finished_sentinel() -> dict[str, Any]:
+    """Return a minimal payload with finished=True so Stage-1 can end the request."""
+    return {"code_predictor_codes": [], "finished": torch.tensor(True, dtype=torch.bool)}
+
+
 def llm2code2wav_async_chunk(connector: Any, pooling_output: dict[str, Any], request: Any) -> dict[str, Any] | None:
     """
     Async chunk version: convert stage-0 pooling_output to code2wav payload (pooling / connector accumulation).
@@ -56,6 +61,8 @@ def llm2code2wav_async_chunk(connector: Any, pooling_output: dict[str, Any], req
     returns payload only when chunk_size is full or request is finished; returns None when waiting.
     """
     if "code_predictor_codes" not in pooling_output:
+        if request.is_finished():
+            return _make_finished_sentinel()
         return None
 
     code_predictor_codes = pooling_output["code_predictor_codes"]
