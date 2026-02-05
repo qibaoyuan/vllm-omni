@@ -319,7 +319,7 @@ def main(args):
         elif stage_outputs.final_output_type == "audio":
             for output in stage_outputs.request_output:
                 request_id = output.request_id
-                audio_tensor = output.multimodal_output.get("audio")
+                audio_tensor = output.outputs[0].multimodal_output.get("audio")
 
                 if audio_tensor is None:
                     continue
