@@ -1,13 +1,15 @@
 import base64
 import concurrent.futures
+import datetime
 import json
 import os
-from typing import Any
-import datetime
-import time
+import queue
 import sys
-import requests
+import threading
+import time
+from typing import Any
 
+import requests
 from openai import OpenAI
 from vllm.assets.audio import AudioAsset
 from vllm.utils.argparse_utils import FlexibleArgumentParser
@@ -15,6 +17,10 @@ from vllm.utils.argparse_utils import FlexibleArgumentParser
 # Modify OpenAI's API key and API base to use vLLM's API server.
 openai_api_key = "EMPTY"
 openai_api_base = "http://localhost:18091/v1"
+
+
+# Modify OpenAI's API key and API base to use vLLM's API server.
+
 
 client = OpenAI(
     # defaults to os.environ.get("OPENAI_API_KEY")
@@ -344,68 +350,146 @@ def run_multimodal_generation(args) -> None:
         )
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_concurrent_requests) as executor:
-        futures = [
-            executor.submit(run_one_request, req_id)
-            for req_id in range(num_concurrent_requests)
-        ]
-        # Collect by req_id so chat_completions[i] = response for request i
-        results_by_req = [None] * num_concurrent_requests
-        for future in concurrent.futures.as_completed(futures):
-            req_id, completion = future.result()
-            results_by_req[req_id] = completion
-        chat_completions = results_by_req
+        futures = [executor.submit(run_one_request, req_id) for req_id in range(num_concurrent_requests)]
 
-    assert len(chat_completions) == num_concurrent_requests
-    count = 0
-    if not args.stream:
-        for req_id, chat_completion in enumerate(chat_completions):
-            chat_completion_id = getattr(chat_completion, "id", "")
-            for choice in chat_completion.choices:
-                if choice.message.audio:
-                    audio_data = base64.b64decode(choice.message.audio.data)
-                    audio_file_path = f"{output_audio_path}/{args.query_type}/audio_{count}.wav"
-                    os.makedirs(os.path.dirname(audio_file_path), exist_ok=True)
-                    with open(audio_file_path, "wb") as f:
-                        f.write(audio_data)
-                    print(f"[req {req_id}_{chat_completion_id}] Audio saved to {audio_file_path}")
-                    count += 1
-                elif choice.message.content:
-                    print(f"[req {req_id}_{chat_completion_id}] Chat completion output from text:", choice.message.content)
-    else:
-        for req_id, chat_completion in enumerate(chat_completions):
-            printed_text_prefix = False
-            chat_completion_id = None
-            for chunk in chat_completion:
-                chat_completion_id = getattr(chunk, "id", "")
-                for choice in chunk.choices:
-                    if hasattr(choice, "delta"):
-                        content = getattr(choice.delta, "content", None)
-                    else:
-                        content = None
+        if not args.stream:
+            # Collect by req_id so chat_completions[i] = response for request i
+            results_by_req = [None] * num_concurrent_requests
+            for future in concurrent.futures.as_completed(futures):
+                req_id, completion = future.result()
+                results_by_req[req_id] = completion
+            chat_completions = results_by_req
 
-                    if getattr(chunk, "modality", None) == "audio" and content:
-                        audio_data = base64.b64decode(content)
-                        audio_file_path = f"{output_audio_path}/{args.query_type}/{num_concurrent_requests}/{chat_completion_id}/audio_{count}.wav"
+            assert len(chat_completions) == num_concurrent_requests
+            count = 0
+            for req_id, chat_completion in enumerate(chat_completions):
+                chat_completion_id = getattr(chat_completion, "id", "")
+                for choice in chat_completion.choices:
+                    if choice.message.audio:
+                        audio_data = base64.b64decode(choice.message.audio.data)
+                        audio_file_path = f"{output_audio_path}/{args.query_type}/audio_{count}.wav"
                         os.makedirs(os.path.dirname(audio_file_path), exist_ok=True)
                         with open(audio_file_path, "wb") as f:
                             f.write(audio_data)
-                        print(f"\n[req {req_id}_{chat_completion_id}] Audio saved to {audio_file_path}", file=sys.stderr, flush=True)
+                        print(f"[req {req_id}_{chat_completion_id}] Audio saved to {audio_file_path}")
                         count += 1
+                    elif choice.message.content:
+                        print(
+                            f"[req {req_id}_{chat_completion_id}] Chat completion output from text:",
+                            choice.message.content,
+                        )
+        else:
+            # Stream mode: process chunks from all requests in real-time,
+            # displaying them in the order they arrive.
+            chunk_queue = queue.Queue()
+            audio_counters = {}
+            chat_completion_id_by_req = {}
+            chat_completion_id_lock = threading.Lock()
+            last_text_req_id = None
 
-                    elif getattr(chunk, "modality", None) == "text" and content:
-                        if not printed_text_prefix:
-                            printed_text_prefix = True
-                            print(f"\n[req {req_id}_{chat_completion_id}] content:", end="", flush=True)
-                        print(content, end="", flush=True)
-            print(f" [req {req_id}_{chat_completion_id}] Time finished for streaming: ", datetime.datetime.now(), file=sys.stderr, flush=True)
-        
-        elapsed = time.perf_counter() - start_time
-        print(f"num_concurrent_requests_{num_concurrent_requests}>>>>>>>>>Time finished for streaming<<<<<<<<: ", elapsed, file=sys.stderr, flush=True)
-        timing_audio_folder = f"{output_audio_path}/{args.query_type}/{num_concurrent_requests}"
-        os.makedirs(timing_audio_folder, exist_ok=True)
-        timing_file = os.path.join(timing_audio_folder, "streaming_finish_time.txt")
-        with open(timing_file, "w") as f:
-            f.write(f"num_concurrent_requests_{num_concurrent_requests} elapsed_seconds: {elapsed}\n")
+            def _stream_reader(req_id: int, stream):
+                """Read one stream and relay every chunk to the shared queue."""
+                try:
+                    for chunk in stream:
+                        chunk_queue.put((req_id, time.perf_counter(), chunk))
+                    chunk_queue.put((req_id, time.perf_counter(), None))
+                except Exception as e:
+                    print(f"\n[Request {req_id}] stream error: {e}", file=sys.stderr, flush=True)
+                    chunk_queue.put((req_id, time.time(), None))
+
+            # Kick off a reader thread per request
+            reader_threads = []
+            for req_id, future in enumerate(futures):
+                req_id_from_future, stream = future.result()
+                assert req_id == req_id_from_future, f"Request ID mismatch: {req_id} != {req_id_from_future}"
+                audio_counters[req_id] = 0
+                t = threading.Thread(target=_stream_reader, args=(req_id, stream), daemon=True)
+                t.start()
+                reader_threads.append(t)
+
+            # Main loop – consume chunks in arrival order
+            active_streams = set(range(num_concurrent_requests))
+            while active_streams:
+                try:
+                    request_id, ts, chunk = chunk_queue.get(timeout=2.0)
+                except queue.Empty:
+                    if all(not t.is_alive() for t in reader_threads):
+                        break
+                    continue
+
+                if chunk is None:
+                    elapsed = ts - start_time
+                    print(f"  ({elapsed:.2f}s)", flush=True)
+                    with chat_completion_id_lock:
+                        chat_completion_id = chat_completion_id_by_req.get(request_id, "")
+                    print(
+                        f" [req {request_id}_{chat_completion_id}] Time finished for streaming: ",
+                        datetime.datetime.now(),
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    active_streams.discard(request_id)
+                    continue
+
+                with chat_completion_id_lock:
+                    if request_id not in chat_completion_id_by_req:
+                        chat_completion_id_by_req[request_id] = getattr(chunk, "id", "")
+                    chat_completion_id = chat_completion_id_by_req[request_id]
+
+                modality = getattr(chunk, "modality", None)
+                elapsed = ts - start_time
+                for choice in chunk.choices:
+                    content = getattr(choice.delta, "content", None) if hasattr(choice, "delta") else None
+
+                    if modality == "audio" and content:
+                        audio_data = base64.b64decode(content)
+                        audio_dir = (
+                            f"{output_audio_path}/{args.query_type}/{num_concurrent_requests}/{chat_completion_id}"
+                        )
+                        os.makedirs(audio_dir, exist_ok=True)
+                        audio_file_path = f"{audio_dir}/audio_{audio_counters[request_id]}.wav"
+                        with open(audio_file_path, "wb") as f:
+                            f.write(audio_data)
+                        print(
+                            f"\n[{elapsed:7.2f}s][req {request_id}_{chat_completion_id}] Audio saved to {audio_file_path}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        audio_counters[request_id] += 1
+
+                    elif modality == "text" and content:
+                        if last_text_req_id != request_id:
+                            if last_text_req_id is not None:
+                                print(flush=True)
+                            print(
+                                f"\n[{elapsed:7.2f}s][req {request_id}_{chat_completion_id}] content:",
+                                end="",
+                                flush=True,
+                            )
+                            last_text_req_id = request_id
+                        print(
+                            f"\n[{elapsed:7.2f}s][req {request_id}_{chat_completion_id}] {content}", end="", flush=True
+                        )
+
+            # Final newline if the last output was streaming text
+            if last_text_req_id is not None:
+                print(flush=True)
+
+            for t in reader_threads:
+                t.join(timeout=1.0)
+
+            elapsed = time.perf_counter() - start_time
+            print(
+                f"num_concurrent_requests_{num_concurrent_requests}>>>>>>>>>Time finished for streaming<<<<<<<<: ",
+                elapsed,
+                file=sys.stderr,
+                flush=True,
+            )
+            timing_audio_folder = f"{output_audio_path}/{args.query_type}/{num_concurrent_requests}"
+            os.makedirs(timing_audio_folder, exist_ok=True)
+            timing_file = os.path.join(timing_audio_folder, "streaming_finish_time.txt")
+            with open(timing_file, "w") as f:
+                f.write(f"num_concurrent_requests_{num_concurrent_requests} elapsed_seconds: {elapsed}\n")
 
 
 def parse_args():
@@ -429,7 +513,8 @@ def parse_args():
         "--message-json",
         "-m",
         type=str,
-        default="../../offline_inference/mimo_audio/message_base64_wav.json",
+        # default="../../offline_inference/mimo_audio/message_base64_wav.json",
+        default="../../offline_inference/mimo_audio/message_base64_wav_tts.json",
         help="Path to message.json file containing conversation history. When provided, "
         "system prompt and multi_audios query will be loaded from this file.",
     )
