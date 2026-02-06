@@ -3,8 +3,11 @@ import concurrent.futures
 import json
 import os
 from typing import Any
-
+import datetime
+import time
+import sys
 import requests
+
 from openai import OpenAI
 from vllm.assets.audio import AudioAsset
 from vllm.utils.argparse_utils import FlexibleArgumentParser
@@ -329,24 +332,34 @@ def run_multimodal_generation(args) -> None:
         messages = [prompt]
 
     num_concurrent_requests = args.num_concurrent_requests
+    start_time = time.perf_counter()
+
+    def run_one_request(req_id: int):
+        """Submit one request and return (req_id, response) to preserve request order."""
+        return req_id, client.chat.completions.create(
+            messages=messages,
+            model=model_name,
+            extra_body=extra_body,
+            stream=args.stream,
+        )
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_concurrent_requests) as executor:
         futures = [
-            executor.submit(
-                client.chat.completions.create,
-                messages=messages,
-                model=model_name,
-                extra_body=extra_body,
-                stream=args.stream,
-            )
-            for _ in range(num_concurrent_requests)
+            executor.submit(run_one_request, req_id)
+            for req_id in range(num_concurrent_requests)
         ]
-        chat_completions = [future.result() for future in concurrent.futures.as_completed(futures)]
+        # Collect by req_id so chat_completions[i] = response for request i
+        results_by_req = [None] * num_concurrent_requests
+        for future in concurrent.futures.as_completed(futures):
+            req_id, completion = future.result()
+            results_by_req[req_id] = completion
+        chat_completions = results_by_req
 
     assert len(chat_completions) == num_concurrent_requests
     count = 0
     if not args.stream:
-        for chat_completion in chat_completions:
+        for req_id, chat_completion in enumerate(chat_completions):
+            chat_completion_id = getattr(chat_completion, "id", "")
             for choice in chat_completion.choices:
                 if choice.message.audio:
                     audio_data = base64.b64decode(choice.message.audio.data)
@@ -354,29 +367,45 @@ def run_multimodal_generation(args) -> None:
                     os.makedirs(os.path.dirname(audio_file_path), exist_ok=True)
                     with open(audio_file_path, "wb") as f:
                         f.write(audio_data)
-                    print(f"Audio saved to {audio_file_path}")
+                    print(f"[req {req_id}_{chat_completion_id}] Audio saved to {audio_file_path}")
                     count += 1
                 elif choice.message.content:
-                    print("Chat completion output from text:", choice.message.content)
+                    print(f"[req {req_id}_{chat_completion_id}] Chat completion output from text:", choice.message.content)
     else:
-        printed_content = False
-        for chat_completion in chat_completions:
+        for req_id, chat_completion in enumerate(chat_completions):
+            printed_text_prefix = False
+            chat_completion_id = None
             for chunk in chat_completion:
+                chat_completion_id = getattr(chunk, "id", "")
                 for choice in chunk.choices:
-                    content = getattr(choice.delta, "content", None)
+                    if hasattr(choice, "delta"):
+                        content = getattr(choice.delta, "content", None)
+                    else:
+                        content = None
+
                     if getattr(chunk, "modality", None) == "audio" and content:
                         audio_data = base64.b64decode(content)
-                        audio_file_path = f"{output_audio_path}/{args.query_type}/audio_{count}.wav"
+                        audio_file_path = f"{output_audio_path}/{args.query_type}/{num_concurrent_requests}/{chat_completion_id}/audio_{count}.wav"
                         os.makedirs(os.path.dirname(audio_file_path), exist_ok=True)
                         with open(audio_file_path, "wb") as f:
                             f.write(audio_data)
-                        print(f"\nAudio saved to {audio_file_path}")
+                        print(f"\n[req {req_id}_{chat_completion_id}] Audio saved to {audio_file_path}", file=sys.stderr, flush=True)
                         count += 1
+
                     elif getattr(chunk, "modality", None) == "text" and content:
-                        if not printed_content:
-                            printed_content = True
-                            print("\ncontent:", end="", flush=True)
+                        if not printed_text_prefix:
+                            printed_text_prefix = True
+                            print(f"\n[req {req_id}_{chat_completion_id}] content:", end="", flush=True)
                         print(content, end="", flush=True)
+            print(f" [req {req_id}_{chat_completion_id}] Time finished for streaming: ", datetime.datetime.now(), file=sys.stderr, flush=True)
+        
+        elapsed = time.perf_counter() - start_time
+        print(f"num_concurrent_requests_{num_concurrent_requests}>>>>>>>>>Time finished for streaming<<<<<<<<: ", elapsed, file=sys.stderr, flush=True)
+        timing_audio_folder = f"{output_audio_path}/{args.query_type}/{num_concurrent_requests}"
+        os.makedirs(timing_audio_folder, exist_ok=True)
+        timing_file = os.path.join(timing_audio_folder, "streaming_finish_time.txt")
+        with open(timing_file, "w") as f:
+            f.write(f"num_concurrent_requests_{num_concurrent_requests} elapsed_seconds: {elapsed}\n")
 
 
 def parse_args():

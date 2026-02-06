@@ -18,8 +18,8 @@ stage_args:
       gpu_memory_utilization: 0.3
       enforce_eager: true    # need to discuss
       trust_remote_code: true
-      engine_output_type: latent   # change the param name,such as pooling_output
       enable_prefix_caching: false
+      engine_output_type: latent   # change the param name,such as pooling_output
       max_model_len: 8192
       max_num_batched_tokens: 8192
       custom_process_next_stage_input_func: vllm_omni.model_executor.stage_input_processors.mimo_audio.llm2code2wav_async_chunk

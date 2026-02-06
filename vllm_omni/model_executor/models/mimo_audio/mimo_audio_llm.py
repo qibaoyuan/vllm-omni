@@ -61,7 +61,7 @@ logger = logging.getLogger(__name__)
 
 # CUDA Graph buckets for MiMo local decoding / input_local_transformer.
 # We keep the list small to balance warmup time and runtime coverage.
-MIMO_CUDAGRAPH_BATCH_SIZES: tuple[int, ...] = (1, 2, 4, 6, 8)
+MIMO_CUDAGRAPH_BATCH_SIZES: tuple[int, ...] = (1, 2, 4, 6, 8, 16, 32, 64, 128)
 
 
 @dataclass
