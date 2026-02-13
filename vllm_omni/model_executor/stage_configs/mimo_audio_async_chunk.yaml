@@ -8,7 +8,7 @@ stage_args:
     runtime:
       process: true           # Run this stage in a separate process
       devices: "0"            # Visible devices for this stage (CUDA_VISIBLE_DEVICES/torch.cuda.set_device)
-      max_batch_size: 1
+      max_batch_size: 1024
     engine_args:
       dtype: bfloat16
       model_stage: fused_thinker_talker
@@ -52,8 +52,8 @@ stage_args:
       async_scheduling: false
       enable_prefix_caching: false
       engine_output_type: audio
-      max_model_len: 8192
-      max_num_batched_tokens: 8192
+      max_model_len: 68192
+      max_num_batched_tokens: 68192
     engine_input_source: [0]
     is_comprehension: false
     final_output: true

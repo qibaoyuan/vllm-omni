@@ -19,6 +19,9 @@ from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.sampler import Sampler
 
 from vllm_omni.model_executor.models.mimo_audio.config_mimo_audio import MiMoAudioConfig
+from vllm_omni.model_executor.models.mimo_audio.cuda_graph_decoder_wrapper import (
+    CUDAGraphDecoderWrapper,
+)
 from vllm_omni.model_executor.models.mimo_audio.modeling_audio_tokenizer import MiMoAudioTokenizer
 
 logger = logging.getLogger(__name__)
@@ -102,6 +105,7 @@ class MiMoAudioTokenizerWorker:
         self.group_size = self.config.group_size
         self.audio_channels = self.config.audio_channels
         self.sample_rate = self.audio_tokenizer.config.sampling_rate
+        self._cudagraph_wrapper: CUDAGraphDecoderWrapper | None = None
 
         # Warmup (skip for CPU due to potential shape mismatch issues)
         if device_str != "cpu":
@@ -117,6 +121,7 @@ class MiMoAudioTokenizerWorker:
                 )
             except Exception as e:
                 logger.warning("[tokenizer worker] Warmup failed (non-critical): %s", str(e))
+            # self._enable_decoder_cudagraph()
         else:
             logger.info("[tokenizer worker] Skipping warmup for CPU device")
 
@@ -126,6 +131,30 @@ class MiMoAudioTokenizerWorker:
         if original_sr != target_sr:
             wav_tensor = torchaudio.functional.resample(wav_tensor, original_sr, target_sr)
         return wav_tensor
+    
+    def _enable_decoder_cudagraph(self) -> None:
+        """Enable CUDA Graph for decode (streaming and non-streaming)."""
+        if self.device == "cpu":
+            return
+        try:
+            cfg = self.audio_tokenizer.config
+            total_upsample_per_frame = (
+                getattr(cfg, "avg_pooler", 2)
+                * getattr(cfg, "stride_size", 2)
+                * getattr(cfg, "hop_length", 240)
+            )
+            device = torch.device(self.device)
+            self._cudagraph_wrapper = CUDAGraphDecoderWrapper(
+                tokenizer=self.audio_tokenizer,
+                audio_channels=self.audio_channels,
+                total_upsample=total_upsample_per_frame,
+                enabled=True,
+            )
+            self._cudagraph_wrapper.warmup(device, dtype=torch.long)
+            logger.info("[MiMo Tokenizer Worker] CUDA Graph enabled for decode")
+        except Exception as e:
+            logger.warning("[MiMo Tokenizer Worker] Failed to enable CUDA Graph: %s", e)
+            self._cudagraph_wrapper = None
 
     def wav2mel(self, wav: torch.Tensor):
         """Convert waveform to mel spectrogram using consistent processing"""
@@ -255,8 +284,15 @@ class MiMoAudioTokenizerWorker:
     ) -> torch.Tensor:
         """Decode audio tokens to waveform using the tokenizer's decoder"""
         tokens = tokens.to(self.device)
+        self.audio_tokenizer.encoder.quantizer.float()
         with torch.no_grad():
-            decoded_audio: torch.Tensor = self.audio_tokenizer.decode(tokens)
+            if (
+                self._cudagraph_wrapper is not None
+                and self._cudagraph_wrapper.enabled
+            ):
+                decoded_audio = self._cudagraph_wrapper.decode(tokens)
+            else:
+                decoded_audio = self.audio_tokenizer.decode(tokens)
         decoded_audio = decoded_audio.float().reshape(-1).detach().cpu()
         return decoded_audio  # [samples] cpu
 
@@ -330,21 +366,53 @@ def extract_audio_code_tensor(
     return audio_tokens  # [audio_channels, T]
 
 
+def _normalize_tokenizer_worker_cache_key(
+    device: torch.device,
+    config_path: str | None,
+    audio_tokenizer_path: str,
+) -> tuple[str, str, str]:
+    """Normalize cache key so that same tokenizer always hits the same cache entry."""
+    device_type = (
+        device.type
+        if isinstance(device, torch.device)
+        else str(device).split(":")[0]
+    )
+    # Use realpath so symlinks / trailing slash don't create duplicate entries
+    ap = audio_tokenizer_path or ""
+    if ap and os.path.exists(ap):
+        ap = os.path.realpath(ap)
+    cp = config_path or ""
+    if cp and os.path.exists(cp):
+        cp = os.path.realpath(cp)
+
+    if not cp and ap:
+        cp = os.path.dirname(ap)
+    return (device_type, cp, ap)
+
+
 _TOKENIZER_WORKER_CACHE: dict[tuple[str, str, str], MiMoAudioTokenizerWorker] = {}
 
 
-def _get_tokenizer_worker(
+def get_tokenizer_worker(
     device: torch.device,
     config_path: str,
     audio_tokenizer_path: str,
 ) -> MiMoAudioTokenizerWorker:
-    key = (str(device), config_path, audio_tokenizer_path)
+    key = _normalize_tokenizer_worker_cache_key(
+        device, config_path, audio_tokenizer_path
+    )
     if key not in _TOKENIZER_WORKER_CACHE:
+        device_type = key[0]
         _TOKENIZER_WORKER_CACHE[key] = MiMoAudioTokenizerWorker(
-            device_str=str(device),
+            device_str=device_type,
             config_path=config_path,
             audio_tokenizer_path=audio_tokenizer_path,
         )
+    logger.info(
+        "[tokenizer cache worker] cache size=%s pid=%s",
+        len(_TOKENIZER_WORKER_CACHE),
+        os.getpid(),
+    )
     return _TOKENIZER_WORKER_CACHE[key]
 
 
@@ -396,7 +464,7 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
             or self.config.name_or_path
         )
 
-        self._tokenizer_service: MiMoAudioTokenizerWorker | None = _get_tokenizer_worker(
+        self._tokenizer_service: MiMoAudioTokenizerWorker | None = get_tokenizer_worker(
             device=self.device,
             config_path=self.tokenizer_config_path,
             audio_tokenizer_path=self.audio_tokenizer_path,
@@ -421,8 +489,8 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
     def chunked_decode_streaming(
         self,
         codes: torch.Tensor,
-        chunk_size: int = 5,
-        left_context_size: int = 5,
+        chunk_size: int = 10,
+        left_context_size: int = 10,
     ) -> torch.Tensor:
         """
         Decode one chunk of codes and return waveform with left context removed.
@@ -461,7 +529,7 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
             raise ValueError("code_tensor is empty.")
 
         if getattr(self.vllm_config.model_config, "async_chunk", False):
-            waveform = self.chunked_decode_streaming(code_tensor, chunk_size=5, left_context_size=5)
+            waveform = self.chunked_decode_streaming(code_tensor, chunk_size=10, left_context_size=10)
         else:
             waveform = self._decode_waveform_from_codes(code_tensor)
 

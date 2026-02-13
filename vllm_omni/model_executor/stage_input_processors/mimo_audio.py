@@ -110,7 +110,7 @@ def llm2code2wav_async_chunk(connector: Any, pooling_output: dict[str, Any], req
     if request_id is None:
         return None
 
-    chunk_size = left_context_size = 5
+    chunk_size = left_context_size = 10
     connector.code_prompt_token_ids[request_id].append(code_list)
     length = len(connector.code_prompt_token_ids[request_id])
     chunk_length = length % chunk_size

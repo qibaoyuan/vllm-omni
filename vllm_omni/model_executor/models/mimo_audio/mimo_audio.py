@@ -45,11 +45,10 @@ from vllm.v1.sample.sampler import Sampler
 
 from vllm_omni.model_executor.custom_process_mixin import CustomProcessMixin
 from vllm_omni.model_executor.models.mimo_audio.config_mimo_audio import MiMoAudioConfig
-from vllm_omni.model_executor.models.mimo_audio.mimo_audio_code2wav import MiMoAudioTokenizerWorker
+from vllm_omni.model_executor.models.mimo_audio.mimo_audio_code2wav import get_tokenizer_worker
 from vllm_omni.model_executor.models.qwen2_5_omni.qwen2_5_omni import OmniOutput
 
 logger = init_logger(__name__)
-_TOKENIZER_WORKER_CACHE: dict[tuple[str, str, str], MiMoAudioTokenizerWorker] = {}
 
 
 def interleave_5_and_5_in_span(
@@ -164,21 +163,6 @@ def interleave_5_and_5_in_span(
         output_ids.extend([pad_token_id] * (original_len - len(output_ids)))
 
     return output_ids
-
-
-def _get_tokenizer_worker(
-    device: torch.device,
-    config_path: str,
-    audio_tokenizer_path: str,
-) -> MiMoAudioTokenizerWorker:
-    key = (str(device), config_path, audio_tokenizer_path)
-    if key not in _TOKENIZER_WORKER_CACHE:
-        _TOKENIZER_WORKER_CACHE[key] = MiMoAudioTokenizerWorker(
-            device_str=str(device),
-            config_path=config_path,
-            audio_tokenizer_path=audio_tokenizer_path,
-        )
-    return _TOKENIZER_WORKER_CACHE[key]
 
 
 class MiMoAudioLLMProcessingInfo(
@@ -298,7 +282,7 @@ class MiMoAudioDataParser(MultiModalDataParser):
 
         self.tokenizer_config_path = os.environ.get("MIMO_AUDIO_TOKENIZER_PATH", None)
 
-        self.mimo_tokenizer = _get_tokenizer_worker(
+        self.mimo_tokenizer = get_tokenizer_worker(
             device=self.device,
             config_path=self.tokenizer_config_path,
             audio_tokenizer_path=self.audio_tokenizer_path,
@@ -818,7 +802,7 @@ class MiMoAudioForConditionalGeneration(
 
         if self.model_stage == "code2wav":
             code = (
-                input_ids
+                input_ids # tensor [seq_len]
                 if input_ids is not None
                 else torch.zeros(
                     inputs_embeds.shape[0],
@@ -878,7 +862,7 @@ class MiMoAudioForConditionalGeneration(
 
         return next_speech_tokens, text_hidden_states
 
-    def generate_audio(self, code):
+    def generate_audio(self, code: torch.Tensor):
         token2wav_dev = self._module_device(self.token2wav)
         # Check if in CUDA graph capture phase
         is_capturing = torch.cuda.is_current_stream_capturing()
@@ -904,7 +888,7 @@ class MiMoAudioForConditionalGeneration(
             code_tensor = code_tensor.squeeze(0)
 
         with torch.inference_mode():
-            audio_tensor = self.token2wav(codes=code_tensor)
+            audio_tensor = self.token2wav(codes=code_tensor) # code_tensor tensor [seq_len]
 
         return audio_tensor
 

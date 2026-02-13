@@ -2,6 +2,7 @@ import base64
 import concurrent.futures
 import datetime
 import json
+import logging
 import os
 import queue
 import sys
@@ -26,6 +27,7 @@ client = OpenAI(
     # defaults to os.environ.get("OPENAI_API_KEY")
     api_key=openai_api_key,
     base_url=openai_api_base,
+    timeout=None,
 )
 
 SEED = 42
@@ -316,6 +318,12 @@ def run_multimodal_generation(args) -> None:
     message_json_path = getattr(args, "message_json", None)
     output_audio_path = getattr(args, "output_audio_path", None)
 
+    # Configure a dedicated logger to write streaming events with timestamps
+    # Log files are stored under: <output_audio_path>/<query_type>/<num_concurrent_requests>/stream_events.log
+    logger = logging.getLogger("mimo_audio_stream")
+    logger.setLevel(logging.INFO)
+    # Handlers are attached later once num_concurrent_requests is known.
+
     # Get the query function and call it with appropriate parameters
     query_func = query_map[args.query_type]
     if args.query_type == "multi_audios":
@@ -338,6 +346,22 @@ def run_multimodal_generation(args) -> None:
         messages = [prompt]
 
     num_concurrent_requests = args.num_concurrent_requests
+
+    # Now that num_concurrent_requests is known, attach a file handler for this run.
+    log_dir = os.path.join(
+        output_audio_path or ".",
+        args.query_type,
+        str(num_concurrent_requests),
+    )
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, "stream_events.log")
+    if not any(isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == os.path.abspath(log_file)
+               for h in logger.handlers):
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+        file_handler.setLevel(logging.INFO)
+        formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
     start_time = time.perf_counter()
 
     def run_one_request(req_id: int):
@@ -367,7 +391,7 @@ def run_multimodal_generation(args) -> None:
                 for choice in chat_completion.choices:
                     if choice.message.audio:
                         audio_data = base64.b64decode(choice.message.audio.data)
-                        audio_file_path = f"{output_audio_path}/{args.query_type}/audio_{count}.wav"
+                        audio_file_path = f"{output_audio_path}/{args.query_type}/{num_concurrent_requests}/{chat_completion_id}/audio_{count}.wav"
                         os.makedirs(os.path.dirname(audio_file_path), exist_ok=True)
                         with open(audio_file_path, "wb") as f:
                             f.write(audio_data)
@@ -411,7 +435,8 @@ def run_multimodal_generation(args) -> None:
             active_streams = set(range(num_concurrent_requests))
             while active_streams:
                 try:
-                    request_id, ts, chunk = chunk_queue.get(timeout=2.0)
+                    # request_id, ts, chunk = chunk_queue.get(timeout=2.0)
+                    request_id, ts, chunk = chunk_queue.get()
                 except queue.Empty:
                     if all(not t.is_alive() for t in reader_threads):
                         break
@@ -451,9 +476,16 @@ def run_multimodal_generation(args) -> None:
                         with open(audio_file_path, "wb") as f:
                             f.write(audio_data)
                         print(
-                            f"\n[{elapsed:7.2f}s][req {request_id}_{chat_completion_id}] Audio saved to {audio_file_path}",
+                            f"\n[{elapsed:7.5f}s][req {request_id}_{chat_completion_id}] Audio saved to {audio_file_path}",
                             file=sys.stderr,
                             flush=True,
+                        )
+                        logger.info(
+                            "Audio saved | req=%s_%s | elapsed=%.5fs | path=%s",
+                            request_id,
+                            chat_completion_id,
+                            elapsed,
+                            audio_file_path,
                         )
                         audio_counters[request_id] += 1
 
@@ -462,7 +494,7 @@ def run_multimodal_generation(args) -> None:
                             if last_text_req_id is not None:
                                 print(flush=True)
                             print(
-                                f"\n[{elapsed:7.2f}s][req {request_id}_{chat_completion_id}] content:",
+                                f"\n[{elapsed:7.5f}s][req {request_id}_{chat_completion_id}] content:",
                                 end="",
                                 flush=True,
                             )
@@ -470,26 +502,34 @@ def run_multimodal_generation(args) -> None:
                         print(
                             f"\n[{elapsed:7.2f}s][req {request_id}_{chat_completion_id}] {content}", end="", flush=True
                         )
+                        logger.info(
+                            "Text chunk | req=%s_%s | elapsed=%.5fs | content=%s",
+                            request_id,
+                            chat_completion_id,
+                            elapsed,
+                            content,
+                        )
 
             # Final newline if the last output was streaming text
             if last_text_req_id is not None:
                 print(flush=True)
 
             for t in reader_threads:
-                t.join(timeout=1.0)
+                # t.join(timeout=1.0)
+                t.join()
 
-            elapsed = time.perf_counter() - start_time
-            print(
-                f"num_concurrent_requests_{num_concurrent_requests}>>>>>>>>>Time finished for streaming<<<<<<<<: ",
-                elapsed,
-                file=sys.stderr,
-                flush=True,
-            )
-            timing_audio_folder = f"{output_audio_path}/{args.query_type}/{num_concurrent_requests}"
-            os.makedirs(timing_audio_folder, exist_ok=True)
-            timing_file = os.path.join(timing_audio_folder, "streaming_finish_time.txt")
-            with open(timing_file, "w") as f:
-                f.write(f"num_concurrent_requests_{num_concurrent_requests} elapsed_seconds: {elapsed}\n")
+        elapsed = time.perf_counter() - start_time
+        print(
+            f"num_concurrent_requests_{num_concurrent_requests}>>>>>>>>>Time finished for streaming<<<<<<<<: ",
+            elapsed,
+            file=sys.stderr,
+            flush=True,
+        )
+        timing_audio_folder = f"{output_audio_path}/{args.query_type}/{num_concurrent_requests}"
+        os.makedirs(timing_audio_folder, exist_ok=True)
+        timing_file = os.path.join(timing_audio_folder, f"streaming_finish_time_{args.num_metrics}.txt")
+        with open(timing_file, "w") as f:
+            f.write(f"num_concurrent_requests_{num_concurrent_requests} elapsed_seconds: {elapsed}\n")
 
 
 def parse_args():
@@ -535,6 +575,12 @@ def parse_args():
         type=int,
         default=1,
         help="Number of concurrent requests to send. Default is 1.",
+    )
+    parser.add_argument(
+        "--num-metrics",
+        type=int,
+        default=5,
+        help="Number of Metrics to collect. Default is 5.",
     )
 
     return parser.parse_args()

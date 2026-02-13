@@ -605,7 +605,6 @@ class AudioEncoder(nn.Module):
 
     @torch.no_grad()
     def decode_vq(self, codes):
-        self.quantizer.float()
         hidden_states = self.quantizer.decode(codes)
 
         return hidden_states
@@ -763,12 +762,17 @@ class MiMoAudioTokenizer(PreTrainedModel):
         return hidden_states, hidden_states_packed, encoder_output_length, codes
 
     @torch.no_grad()
-    def decode(self, codes):
+    def decode(self, codes, static_input_length=None):
+        # static_input_length: optional pre-allocated tensor for CUDA graph capture.
+        # When None, create dynamically (eager); when provided, use it (graph-captureable).
         hidden_states = self.encoder.decode_vq(codes)
-        output = self.decoder(
-            hidden_states,
-            torch.tensor([hidden_states.size(0)], device=hidden_states.device),
-        )
+        if static_input_length is not None:
+            input_length = static_input_length
+        else:
+            input_length = torch.tensor(
+                [hidden_states.size(0)], device=hidden_states.device, dtype=torch.long
+            )
+        output = self.decoder(hidden_states, input_length)
         return output
 
     @torch.no_grad()
