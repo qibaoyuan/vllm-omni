@@ -5,6 +5,7 @@ This example shows how to use vLLM for running offline inference
 with the correct prompt format on MiMo-Audio-Omni.
 """
 
+import copy
 import json
 import os
 from typing import NamedTuple
@@ -27,7 +28,7 @@ from vllm_omni.inputs.data import OmniTokensPrompt
 
 SEED = 42
 
-MAX_CODE2WAV_TOKENS = 18192
+MAX_CODE2WAV_TOKENS = 18192  # Maximum tokens supported by code2wav model
 
 
 class QueryResult(NamedTuple):
@@ -286,7 +287,7 @@ def main(args):
     else:
         raise ValueError(f"Invalid query type: {args.query_type}")
 
-    prompts = [query_result for _ in range(args.num_prompts)]
+    prompts = [copy.deepcopy(query_result) for _ in range(args.num_prompts)]
 
     print("prompts", prompts)
     omni_outputs = omni_llm.generate(prompts, sampling_params_list)
@@ -378,7 +379,6 @@ def parse_args():
     parser.add_argument(
         "--enable-stats",
         action="store_true",
-        default=True,
         help="Enable writing detailed statistics (default: disabled)",
     )
     parser.add_argument(
@@ -397,7 +397,7 @@ def parse_args():
         "--init-timeout",
         type=int,
         default=5000,
-        help="Timeout for initializing stages in seconds (default: 300)",
+        help="Timeout for initializing stages in seconds (default: 5000)",
     )
     parser.add_argument(
         "--shm-threshold-bytes",
@@ -409,6 +409,11 @@ def parse_args():
         "--output-dir",
         default="./output_audio",
         help="Output audio wav directory.",
+    )
+    parser.add_argument(
+        "--output-wav",
+        default="output_audio",
+        help="[Deprecated] Output wav directory (use --output-dir).",
     )
     parser.add_argument(
         "--num-prompts",
