@@ -121,7 +121,7 @@ class MiMoAudioTokenizerWorker:
                 )
             except Exception as e:
                 logger.warning("[tokenizer worker] Warmup failed (non-critical): %s", str(e))
-            # self._enable_decoder_cudagraph()
+            self._enable_decoder_cudagraph()
         else:
             logger.info("[tokenizer worker] Skipping warmup for CPU device")
 

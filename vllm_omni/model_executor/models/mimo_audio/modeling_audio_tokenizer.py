@@ -23,33 +23,39 @@ except Exception:
     logger.warning("flash_attn not installed")
 
 
-def get_sequence_mask(inputs, inputs_length):
+
+def get_sequence_mask(inputs, inputs_length, tgt_len_int: int | None = None):
     if inputs.dim() == 3:
         bsz, tgt_len, _ = inputs.size()
     else:
-        bsz, tgt_len = inputs_length.shape[0], torch.max(inputs_length)
-    sequence_mask = torch.arange(0, tgt_len).to(inputs.device)
+        bsz = inputs_length.shape[0]
+        tgt_len = tgt_len_int if tgt_len_int is not None else int(torch.max(inputs_length).item())
+    sequence_mask = torch.arange(0, tgt_len, device=inputs.device)
     sequence_mask = torch.lt(sequence_mask, inputs_length.reshape(bsz, 1)).view(bsz, tgt_len, 1)
     unpacking_index = torch.cumsum(sequence_mask.to(torch.int64).view(-1), dim=0) - 1
     return sequence_mask, unpacking_index
 
 
-def unpack_hidden_states(hidden_states, lengths, sequence_mask=None, unpacking_index=None):
+def unpack_hidden_states(hidden_states, lengths, sequence_mask=None, unpacking_index=None,
+                         max_len_int: int | None = None):
     bsz = lengths.shape[0]
     if sequence_mask is None or unpacking_index is None:
         sequence_mask, unpacking_index = get_sequence_mask(hidden_states, lengths)
+    max_len = max_len_int if max_len_int is not None else int(torch.max(lengths).item())
     hidden_states = torch.index_select(hidden_states, 0, unpacking_index).view(
-        bsz, torch.max(lengths), hidden_states.shape[-1]
+        bsz, max_len, hidden_states.shape[-1]
     )
     hidden_states = torch.where(sequence_mask, hidden_states, 0)
     return hidden_states
 
 
-def get_position_ids(lengths):
-    total_len = lengths.sum()
+def get_position_ids(lengths, total_len_int: int | None = None):
+    if total_len_int is not None and lengths.shape[0] == 1:
+        return torch.arange(0, total_len_int, device=lengths.device, dtype=torch.long)
+    total_len = int(lengths.sum().item())
     offset = torch.cat([torch.zeros(1).to(lengths), lengths[:-1].cumsum(dim=0)])
     offset = torch.repeat_interleave(offset, lengths)
-    position_ids = torch.arange(0, total_len).to(offset) - offset
+    position_ids = torch.arange(0, total_len, device=lengths.device).to(offset) - offset
     return position_ids
 
 
@@ -270,6 +276,7 @@ class Attention(nn.Module):
         hidden_states: torch.Tensor,
         seq_len: torch.Tensor,
         rope_position_embeddings=None,
+        max_seqlen_int: int | None = None,
     ):
         total_seq_len, _ = hidden_states.size()
 
@@ -285,7 +292,10 @@ class Attention(nn.Module):
         if hidden_states.is_cuda and is_flash_atth_available is True:
             # === Use flash-attn in GPU mode ===
             cu_len = F.pad(torch.cumsum(seq_len, dim=0), (1, 0), "constant", 0).to(torch.int32)
-            max_seqlen = torch.max(seq_len).to(torch.int32).detach()
+            if max_seqlen_int is not None:
+                max_seqlen = max_seqlen_int
+            else:
+                max_seqlen = int(torch.max(seq_len).item())
             attn_output = flash_attn_varlen_func(
                 query_states,
                 key_states,
@@ -358,10 +368,15 @@ class TransformerLayer(nn.Module):
         hidden_states: torch.Tensor,
         seq_len: torch.Tensor,
         rope_position_embeddings: torch.Tensor,
+        max_seqlen_int: int | None = None,
     ) -> torch.Tensor:
         residual = hidden_states
         hidden_states = self.self_attn_layer_norm(hidden_states)
-        hidden_states = self.self_attn(hidden_states, seq_len, rope_position_embeddings=rope_position_embeddings)
+        hidden_states = self.self_attn(
+            hidden_states, seq_len,
+            rope_position_embeddings=rope_position_embeddings,
+            max_seqlen_int=max_seqlen_int,
+        )
         hidden_states = residual + hidden_states
         residual = hidden_states
         hidden_states = self.final_layer_norm(hidden_states)
@@ -369,9 +384,7 @@ class TransformerLayer(nn.Module):
         hidden_states = self.fc2(hidden_states)
         hidden_states = residual + hidden_states
 
-        if (hidden_states.dtype == torch.float16 or hidden_states.dtype == torch.bfloat16) and (
-            torch.isinf(hidden_states).any() or torch.isnan(hidden_states).any()
-        ):
+        if hidden_states.dtype == torch.float16 or hidden_states.dtype == torch.bfloat16:
             clamp_value = torch.finfo(hidden_states.dtype).max - 1000
             hidden_states = torch.clamp(hidden_states, min=-clamp_value, max=clamp_value)
         return hidden_states
@@ -415,18 +428,22 @@ class TransformerVocos(nn.Module):
             self.config.vocoder_padding,
         )
 
-    def forward(self, x: torch.Tensor, input_length):
+    def forward(self, x: torch.Tensor, input_length,
+                max_seqlen_int: int | None = None, seq_len_int: int | None = None):
         x = x.transpose(1, 2)
         attention_mask, unpacking_index = get_sequence_mask(x, input_length)
-        x = torch.masked_select(x, attention_mask).view(torch.sum(input_length), self.config.n_mels)
+        pack_len = seq_len_int if seq_len_int is not None else int(torch.sum(input_length).item())
+        x = torch.masked_select(x, attention_mask).view(pack_len, self.config.n_mels)
         x = self.embeddings(x)
         position_ids = torch.arange(0, x.size(0), device=x.device, dtype=torch.long)
         rope_position_embeddings = self.position_embedding(x, position_ids)
         for idx, layer in enumerate(self.layers):
-            x = layer(x, input_length, rope_position_embeddings=rope_position_embeddings)
+            x = layer(x, input_length, rope_position_embeddings=rope_position_embeddings,
+                      max_seqlen_int=max_seqlen_int)
 
         x = self.layer_norm(x)
-        x = unpack_hidden_states(x, input_length, attention_mask, unpacking_index)
+        x = unpack_hidden_states(x, input_length, attention_mask, unpacking_index,
+                                 max_len_int=seq_len_int)
         x = self.head(x)
         output_length = input_length * self.hop_size
         return x[:, None, :], output_length
@@ -605,6 +622,7 @@ class AudioEncoder(nn.Module):
 
     @torch.no_grad()
     def decode_vq(self, codes):
+        # self.quantizer.float()
         hidden_states = self.quantizer.decode(codes)
 
         return hidden_states
@@ -618,17 +636,20 @@ class CausalConvTranspose1d(nn.Module):
         self.in_channels = in_channels
         self.out_channels = out_channels
 
-    def forward(self, hidden_states, input_length, output_dim=None):
+    def forward(self, hidden_states, input_length, output_dim=None,
+                input_len_int: int | None = None, output_len_int: int | None = None):
         kernel_size = self.conv.kernel_size[0]
         stride = self.conv.stride[0]
         bsz = input_length.shape[0]
 
         if output_dim is None:
             output_dim = hidden_states.dim()
-        if hidden_states.dim() <= 2:  # unpack sequence to 3d
-            sequence_mask, unpacking_index = get_sequence_mask(hidden_states, input_length)
+        if hidden_states.dim() <= 2:
+            max_in = input_len_int if input_len_int is not None else int(torch.max(input_length).item())
+            sequence_mask, unpacking_index = get_sequence_mask(
+                hidden_states, input_length, tgt_len_int=input_len_int)
             hidden_states = torch.index_select(hidden_states, 0, unpacking_index).view(
-                bsz, torch.max(input_length), self.in_channels
+                bsz, max_in, self.in_channels
             )
             hidden_states = torch.where(sequence_mask, hidden_states, 0)
 
@@ -645,7 +666,8 @@ class CausalConvTranspose1d(nn.Module):
             hidden_states = torch.masked_select(hidden_states, sequence_mask).view(-1, self.out_channels)
         else:
             hidden_states = torch.where(sequence_mask, hidden_states, 0)
-            hidden_states = hidden_states[:, : torch.max(output_length), :]
+            max_out = output_len_int if output_len_int is not None else int(torch.max(output_length).item())
+            hidden_states = hidden_states[:, :max_out, :]
         return hidden_states, output_length
 
 
@@ -699,40 +721,63 @@ class AudioDecoder(nn.Module):
         self,
         audio_embed,
         input_length,
+        graph_context: dict | None = None,
     ):
         assert audio_embed.shape[-1] == self.config.d_model
         audio_embed = audio_embed.to(self.layer_norm.weight)
 
+        gc = graph_context or {}
+        vq_len = gc.get("vq_seq_len")
+        dconv1_len = gc.get("dconv1_output_len")
+        dconv2_len = gc.get("dconv2_output_len")
+        decoder_max_seqlen = gc.get("decoder_max_seqlen_int")
+        vocoder_max_seqlen = gc.get("vocoder_max_seqlen_int")
+
         if self.dconv1 is not None:
-            audio_embed, output_length = self.dconv1(audio_embed, input_length, output_dim=3)
+            audio_embed, output_length = self.dconv1(
+                audio_embed, input_length, output_dim=3,
+                input_len_int=vq_len, output_len_int=dconv1_len,
+            )
         else:
             output_length = input_length
 
         hidden_states = audio_embed
 
-        position_ids = get_position_ids(output_length).long().to(hidden_states.device)
+        position_ids = get_position_ids(
+            output_length, total_len_int=dconv1_len,
+        ).long().to(hidden_states.device)
         rope_position_embeddings = self.position_embedding(hidden_states, position_ids)
 
         # packing hidden states
-        attention_mask, _ = get_sequence_mask(hidden_states, output_length)
-        hidden_states = torch.masked_select(hidden_states, attention_mask).view(
-            torch.sum(output_length), self.config.d_model
-        )
+        pack_len = dconv1_len if dconv1_len is not None else int(torch.sum(output_length).item())
+        if graph_context is not None and dconv1_len is not None:
+            hidden_states = hidden_states.reshape(-1, self.config.d_model)[:pack_len]
+        else:
+            attention_mask, _ = get_sequence_mask(hidden_states, output_length)
+            hidden_states = torch.masked_select(hidden_states, attention_mask).view(
+                pack_len, self.config.d_model
+            )
 
         for idx, encoder_layer in enumerate(self.layers):
             hidden_states = encoder_layer(
                 hidden_states,
                 output_length,
                 rope_position_embeddings=rope_position_embeddings,
+                max_seqlen_int=decoder_max_seqlen,
             )
 
         hidden_states = self.layer_norm(hidden_states)
 
-        coarse_mel, output_length = self.dconv2(hidden_states, output_length, output_dim=3)
+        coarse_mel, output_length = self.dconv2(
+            hidden_states, output_length, output_dim=3,
+            input_len_int=dconv1_len, output_len_int=dconv2_len,
+        )
 
         recon_wav, wav_length = self.vocoder(
             x=coarse_mel.transpose(1, 2),
             input_length=output_length,
+            max_seqlen_int=vocoder_max_seqlen,
+            seq_len_int=dconv2_len,
         )
 
         return recon_wav
@@ -772,7 +817,7 @@ class MiMoAudioTokenizer(PreTrainedModel):
             input_length = torch.tensor(
                 [hidden_states.size(0)], device=hidden_states.device, dtype=torch.long
             )
-        output = self.decoder(hidden_states, input_length)
+        output = self.decoder(hidden_states, input_length, graph_context=graph_context)
         return output
 
     @torch.no_grad()

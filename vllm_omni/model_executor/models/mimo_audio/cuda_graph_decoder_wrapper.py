@@ -8,6 +8,7 @@ reducing kernel launch overhead during inference for both streaming and non-stre
 
 import torch
 from torch.cuda import CUDAGraph
+import traceback
 from typing import Dict, List, Optional
 
 from vllm.logger import init_logger
@@ -21,22 +22,10 @@ class CUDAGraphDecoderWrapper:
 
     This wrapper captures the tokenizer.decode forward pass for fixed input sizes
     and replays them during inference to reduce kernel launch overhead.
-
-    Usage:
-        wrapper = CUDAGraphDecoderWrapper(
-            tokenizer=audio_tokenizer,
-            capture_sizes=[10, 20, 40, 80, 100],
-            audio_channels=8,
-            total_upsample=960,
-        )
-        wrapper.warmup(device)
-
-        # During inference:
-        output = wrapper.decode(audio_codes)  # Automatically uses CUDA graph if possible
     """
 
     # Covers chunk_size=[1, 5, 10, 20]
-    DEFAULT_CAPTURE_SIZES = [4, 20, 40, 80, 160]
+    DEFAULT_CAPTURE_SIZES = [4, 20, 40, 80, 160] # chunk_size * group_size
 
     def __init__(
         self,
@@ -70,8 +59,6 @@ class CUDAGraphDecoderWrapper:
 
         self._warmed_up = False
         self._device = None
-        # Per-size stream for replay; capture uses dedicated stream to avoid corrupting default stream
-        self._replay_streams: Dict[int, torch.cuda.Stream] = {}
         
 
     def _get_padded_size(self, actual_size: int) -> Optional[int]:
@@ -89,16 +76,36 @@ class CUDAGraphDecoderWrapper:
                 return size
         return None
 
+    def _compute_graph_context(self, seq_len: int) -> dict:
+        """Pre-compute ALL int values needed by the decoder to avoid any
+        GPU-tensor-to-Python-int conversion (.item()) during graph capture.
+        """
+        cfg = self.tokenizer.config
+        avg_pooler = getattr(cfg, "avg_pooler", 2)
+        decoder_kernel_size = getattr(cfg, "decoder_kernel_size", 3)
+        decoder_stride_size = getattr(cfg, "decoder_stride_size", 2)
+
+        if avg_pooler != 1:
+            dconv1_output_len = seq_len * avg_pooler
+        else:
+            dconv1_output_len = seq_len
+
+        casual_padding_right = max(0, decoder_kernel_size - decoder_stride_size)
+        dconv2_output_len = (
+            (dconv1_output_len - 1) * decoder_stride_size
+            + decoder_kernel_size
+            - casual_padding_right
+        )
+
+        return {
+            "vq_seq_len": seq_len,
+            "dconv1_output_len": dconv1_output_len,
+            "dconv2_output_len": dconv2_output_len,
+            "decoder_max_seqlen_int": dconv1_output_len,
+            "vocoder_max_seqlen_int": dconv2_output_len,
+        }
+
     def warmup(self, device: torch.device, dtype: torch.dtype = torch.long):
-        """
-        Warmup: capture CUDA graphs for all predefined sizes.
-
-        This should be called once during model initialization.
-
-        Args:
-            device: The device to capture graphs on
-            dtype: Data type for input codes (usually torch.long)
-        """
         if not self.enabled:
             logger.info("[MiMo Tokenizer] CUDA Graph is disabled, skipping warmup")
             return
@@ -128,6 +135,7 @@ class CUDAGraphDecoderWrapper:
                     size,
                     e,
                 )
+                traceback.print_exc()
 
         self._warmed_up = True
         logger.info(
@@ -149,9 +157,6 @@ class CUDAGraphDecoderWrapper:
             device: Device to capture on
             dtype: Input dtype
         """
-        
-        # Use a dedicated stream for capture to avoid corrupting the default stream.
-        capture_stream = torch.cuda.Stream(device=device)
 
         # Create static input buffer: (audio_channels, T)
         static_input = torch.zeros(
@@ -161,33 +166,37 @@ class CUDAGraphDecoderWrapper:
             device=device,
         )
 
-        # Warmup run (required before capture)
-        with torch.no_grad():
-            static_output = self.tokenizer.decode(static_input)
-
-        # Pre-allocate static_input_length for CUDA graph capture. Must avoid
-        # torch.tensor() inside the capture block - use pre-filled buffer instead.
         hidden_states = self.tokenizer.encoder.decode_vq(static_input)
         seq_len = hidden_states.size(0)
         static_input_length = torch.full(
             (1,), seq_len, dtype=torch.long, device=device
         )
 
+        graph_context = self._compute_graph_context(seq_len)
+
+        with torch.no_grad():
+            hidden_states_test = self.tokenizer.decode(
+                static_input,
+                static_input_length=static_input_length,
+                graph_context=graph_context,
+            )
+
         torch.cuda.synchronize(device)
 
         # Capture the graph on the dedicated stream
         graph = CUDAGraph()
-        with torch.cuda.graph(graph, stream=capture_stream):
+        with torch.cuda.graph(graph):
             static_output = self.tokenizer.decode(
-                static_input, static_input_length=static_input_length
+                static_input,
+                static_input_length=static_input_length,
+                graph_context=graph_context,
             )
 
-        # Store everything (only reached when capture succeeds)
         self.graphs[size] = graph
         self.static_inputs[size] = static_input
         self.static_outputs[size] = static_output
         self.static_input_lengths[size] = static_input_length
-        self._replay_streams[size] = capture_stream
+        self._graph_contexts[size] = graph_context
 
     def decode(self, audio_codes: torch.Tensor) -> torch.Tensor:
         """
@@ -210,7 +219,7 @@ class CUDAGraphDecoderWrapper:
         padded_size = self._get_padded_size(actual_size)
 
         if padded_size is None or padded_size not in self.graphs:
-            logger.debug(
+            logger.warning(
                 "Size %d not captured, falling back to eager execution",
                 actual_size,
             )
@@ -220,15 +229,7 @@ class CUDAGraphDecoderWrapper:
         self.static_inputs[padded_size].zero_()
         self.static_inputs[padded_size][:, :actual_size] = audio_codes
 
-        # Sync default stream so copy completes before replay (replay runs on replay stream)
-        torch.cuda.synchronize(self._device)
-        
-        # Replay the graph (uses stream from capture)
         self.graphs[padded_size].replay()
-
-        
-        # Sync replay stream so output is ready before we read it
-        self._replay_streams[padded_size].synchronize()
 
         # Get output and trim to actual size
         output = self.static_outputs[padded_size]
