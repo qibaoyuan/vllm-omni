@@ -181,9 +181,7 @@ def _get_tokenizer_worker(
     return _TOKENIZER_WORKER_CACHE[key]
 
 
-class MiMoAudioLLMProcessingInfo(
-    BaseProcessingInfo,
-):
+class MiMoAudioLLMProcessingInfo(BaseProcessingInfo):
     def get_hf_config(self):
         return self.ctx.get_hf_config(Qwen2Config)
 
@@ -199,6 +197,10 @@ class MiMoAudioLLMProcessingInfo(
         # This method may return None or a dummy processor
         # depending on the actual implementation requirements
         return None
+
+    def get_data_parser(self) -> MultiModalDataParser:
+        sampling_rate = 24000
+        return MiMoAudioDataParser(target_sr=sampling_rate)
 
     def get_feature_extractor(
         self,
@@ -255,9 +257,11 @@ class MiMoAudioLLMDummyInputsBuilder(BaseDummyInputsBuilder[MiMoAudioLLMProcessi
         dummy_text = self.get_dummy_text(mm_counts)
         dummy_mm_data = self.get_dummy_mm_data(seq_len, mm_counts, mm_options)
 
+        dummy_mm_items = self.info.parse_mm_data(dummy_mm_data)
+
         dummy_processor_inputs = ProcessorInputs(
             prompt=dummy_text,
-            mm_data=dummy_mm_data,
+            mm_items=dummy_mm_items,
         )
 
         return dummy_processor_inputs
@@ -354,12 +358,6 @@ class MiMoAudioDataParser(MultiModalDataParser):
 
 
 class MiMoAudioLLMMultiModalProcessor(BaseMultiModalProcessor[MiMoAudioLLMProcessingInfo]):
-    def _get_data_parser(self) -> MultiModalDataParser:
-        # MiMoAudio uses MiMoAudioTokenizer which typically uses 24000 Hz sampling rate
-        # Adjust this based on the actual tokenizer configuration
-        sampling_rate = 24000  # Default for MiMoAudioTokenizer
-        return MiMoAudioDataParser(target_sr=sampling_rate)
-
     def _call_hf_processor(
         self,
         prompt: str,
@@ -624,7 +622,7 @@ class MiMoAudioForConditionalGeneration(
     def fused_thinker_talker_prefill(self, input_ids: torch.Tensor, input_embeds: torch.Tensor, **info_dict: dict):
         empty_token_id = self.fused_thinker_talker.empty_token_id
 
-        mm_kwargs = list[MultiModalKwargsItem]()
+        mm_kwargs = list[tuple[str, MultiModalKwargsItem]]()
         mm_features = info_dict.get("mm_features", [])
         mm_embeddings = []
         prompt_ids = torch.tensor(
@@ -635,14 +633,13 @@ class MiMoAudioForConditionalGeneration(
 
         for mm_feature in mm_features:
             mm_item = mm_feature.data
+
             if mm_item is not None:
                 mm_item["mm_offset"] = MultiModalFieldElem(
-                    modality=mm_item.modality,
-                    key="mm_offset",
                     data=mm_feature.mm_position.offset,
                     field=MultiModalBatchedField(),
                 )
-            mm_kwargs.append(mm_item)
+            mm_kwargs.append((mm_feature.modality, mm_item))
 
         for modality, num_items, mm_kwargs_group in group_mm_kwargs_by_modality(
             mm_kwargs,

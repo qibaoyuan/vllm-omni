@@ -58,7 +58,6 @@ from vllm_omni.platforms import current_omni_platform
 
 logger = logging.getLogger(__name__)
 
-
 # CUDA Graph buckets for MiMo local decoding / input_local_transformer.
 # We keep the list small to balance warmup time and runtime coverage.
 MIMO_CUDAGRAPH_BATCH_SIZES: tuple[int, ...] = (1, 2, 4, 6, 8, 16, 32, 64, 128)
@@ -352,7 +351,9 @@ class MimoAudioEmbeddingInputs(TensorSchema):
 
 
 class MimoAudioProcessingInfo(Qwen2AudioProcessingInfo):
-    pass
+    def build_data_parser(self) -> MultiModalDataParser:
+        feature_extractor = self.get_feature_extractor()
+        return MimoAudioMultiModalDataParser(target_sr=feature_extractor.sampling_rate)
 
 
 class MimoAudioMultiModalDataParser(Qwen2AudioMultiModalDataParser):
@@ -387,10 +388,6 @@ class MimoAudioDummyInputsBuilder(BaseDummyInputsBuilder[MimoAudioProcessingInfo
 
 
 class MimoAudioMultiModalProcessor(BaseMultiModalProcessor[MimoAudioProcessingInfo]):
-    def _get_data_parser(self) -> MultiModalDataParser:
-        feature_extractor = self.info.get_feature_extractor()
-        return MimoAudioMultiModalDataParser(target_sr=feature_extractor.sampling_rate)
-
     def _call_hf_processor(
         self,
         prompt: str,
