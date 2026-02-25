@@ -44,17 +44,17 @@ from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.sampler import Sampler
 
 from vllm_omni.model_executor.custom_process_mixin import CustomProcessMixin
-from vllm_omni.model_executor.models.mimo_audio.mimo_audio_code2wav import get_tokenizer_worker
-from vllm_omni.model_executor.models.qwen2_5_omni.qwen2_5_omni import OmniOutput
 from vllm_omni.model_executor.models.mimo_audio.config_mimo_audio import (
-    MiMoAudioConfig,
-    SPAN_CODEC_START_TOKEN_ID,
+    NO_INTERLEAVE_NEXT_TOKEN_ID,
+    PAD_GROUP_SIZE,
     SPAN_CODEC_END_TOKEN_ID,
+    SPAN_CODEC_START_TOKEN_ID,
     TALKER_CODEC_PAD_TOKEN_ID,
     TEXT_GROUP_SIZE,
-    PAD_GROUP_SIZE,
-    NO_INTERLEAVE_NEXT_TOKEN_ID
+    MiMoAudioConfig,
 )
+from vllm_omni.model_executor.models.mimo_audio.mimo_audio_code2wav import get_tokenizer_worker
+from vllm_omni.model_executor.models.qwen2_5_omni.qwen2_5_omni import OmniOutput
 
 logger = init_logger(__name__)
 
@@ -809,7 +809,7 @@ class MiMoAudioForConditionalGeneration(
 
         if self.model_stage == "code2wav":
             code = (
-                input_ids # tensor [seq_len]
+                input_ids  # tensor [seq_len]
                 if input_ids is not None
                 else torch.zeros(
                     inputs_embeds.shape[0],
@@ -895,7 +895,7 @@ class MiMoAudioForConditionalGeneration(
             code_tensor = code_tensor.squeeze(0)
 
         with torch.inference_mode():
-            audio_tensor = self.token2wav(codes=code_tensor) # code_tensor tensor [seq_len]
+            audio_tensor = self.token2wav(codes=code_tensor)  # code_tensor tensor [seq_len]
 
         return audio_tensor
 

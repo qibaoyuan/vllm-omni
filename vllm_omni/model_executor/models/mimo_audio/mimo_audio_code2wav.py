@@ -18,7 +18,7 @@ from vllm.v1.outputs import SamplerOutput
 from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.sampler import Sampler
 
-from vllm_omni.model_executor.models.mimo_audio.config_mimo_audio import MiMoAudioConfig, TALKER_CODEC_PAD_TOKEN_ID
+from vllm_omni.model_executor.models.mimo_audio.config_mimo_audio import TALKER_CODEC_PAD_TOKEN_ID, MiMoAudioConfig
 from vllm_omni.model_executor.models.mimo_audio.modeling_audio_tokenizer import MiMoAudioTokenizer
 
 logger = logging.getLogger(__name__)
@@ -336,11 +336,7 @@ def _normalize_tokenizer_worker_cache_key(
     audio_tokenizer_path: str,
 ) -> tuple[str, str, str]:
     """Normalize cache key so that same tokenizer always hits the same cache entry."""
-    device_type = (
-        device.type
-        if isinstance(device, torch.device)
-        else str(device).split(":")[0]
-    )
+    device_type = device.type if isinstance(device, torch.device) else str(device).split(":")[0]
     # Use realpath so symlinks / trailing slash don't create duplicate entries
     ap = audio_tokenizer_path or ""
     if ap and os.path.exists(ap):
@@ -362,9 +358,7 @@ def get_tokenizer_worker(
     config_path: str,
     audio_tokenizer_path: str,
 ) -> MiMoAudioTokenizerWorker:
-    key = _normalize_tokenizer_worker_cache_key(
-        device, config_path, audio_tokenizer_path
-    )
+    key = _normalize_tokenizer_worker_cache_key(device, config_path, audio_tokenizer_path)
     if key not in _TOKENIZER_WORKER_CACHE:
         device_type = key[0]
         _TOKENIZER_WORKER_CACHE[key] = MiMoAudioTokenizerWorker(
@@ -554,7 +548,9 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
     def _check_dummy_code_tensor(self, code_tensor: torch.Tensor) -> bool:
         if code_tensor is not None and code_tensor.numel() == DUMMY_CODE_SHAPE:
             code_groups = code_tensor.view(self.config.group_size, self.config.audio_channels + 1)
-            return ((code_groups[:, 0] == TALKER_CODEC_PAD_TOKEN_ID).all() and (code_groups[:, 1:].sum() == 0).all()).item()
+            return (
+                (code_groups[:, 0] == TALKER_CODEC_PAD_TOKEN_ID).all() and (code_groups[:, 1:].sum() == 0).all()
+            ).item()
         return False
 
     def _decode_waveform_from_codes(self, code_tensor: torch.Tensor) -> torch.Tensor:
