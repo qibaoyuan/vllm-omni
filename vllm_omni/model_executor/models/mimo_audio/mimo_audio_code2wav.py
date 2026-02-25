@@ -330,21 +330,53 @@ def extract_audio_code_tensor(
     return audio_tokens  # [audio_channels, T]
 
 
+def _normalize_tokenizer_worker_cache_key(
+    device: torch.device,
+    config_path: str | None,
+    audio_tokenizer_path: str,
+) -> tuple[str, str, str]:
+    """Normalize cache key so that same tokenizer always hits the same cache entry."""
+    device_type = (
+        device.type
+        if isinstance(device, torch.device)
+        else str(device).split(":")[0]
+    )
+    # Use realpath so symlinks / trailing slash don't create duplicate entries
+    ap = audio_tokenizer_path or ""
+    if ap and os.path.exists(ap):
+        ap = os.path.realpath(ap)
+    cp = config_path or ""
+    if cp and os.path.exists(cp):
+        cp = os.path.realpath(cp)
+
+    if not cp and ap:
+        cp = os.path.dirname(ap)
+    return (device_type, cp, ap)
+
+
 _TOKENIZER_WORKER_CACHE: dict[tuple[str, str, str], MiMoAudioTokenizerWorker] = {}
 
 
-def _get_tokenizer_worker(
+def get_tokenizer_worker(
     device: torch.device,
     config_path: str,
     audio_tokenizer_path: str,
 ) -> MiMoAudioTokenizerWorker:
-    key = (str(device), config_path, audio_tokenizer_path)
+    key = _normalize_tokenizer_worker_cache_key(
+        device, config_path, audio_tokenizer_path
+    )
     if key not in _TOKENIZER_WORKER_CACHE:
+        device_type = key[0]
         _TOKENIZER_WORKER_CACHE[key] = MiMoAudioTokenizerWorker(
-            device_str=str(device),
+            device_str=device_type,
             config_path=config_path,
             audio_tokenizer_path=audio_tokenizer_path,
         )
+    logger.info(
+        "[tokenizer cache worker] cache size=%s pid=%s",
+        len(_TOKENIZER_WORKER_CACHE),
+        os.getpid(),
+    )
     return _TOKENIZER_WORKER_CACHE[key]
 
 
@@ -390,7 +422,7 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
             or self.config.name_or_path
         )
 
-        self._tokenizer_service: MiMoAudioTokenizerWorker | None = _get_tokenizer_worker(
+        self._tokenizer_service: MiMoAudioTokenizerWorker | None = get_tokenizer_worker(
             device=self.device,
             config_path=self.tokenizer_config_path,
             audio_tokenizer_path=self.audio_tokenizer_path,
@@ -415,8 +447,8 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
     def chunked_decode_streaming(
         self,
         codes: torch.Tensor,
-        chunk_size: int = 5,
-        left_context_size: int = 5,
+        chunk_size: int = 10,
+        left_context_size: int = 10,
     ) -> torch.Tensor:
         """
         Decode one chunk of codes and return waveform with left context removed.
@@ -455,7 +487,7 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
             raise ValueError("code_tensor is empty.")
 
         if getattr(self.vllm_config.model_config, "async_chunk", False):
-            waveform = self.chunked_decode_streaming(code_tensor, chunk_size=5, left_context_size=5)
+            waveform = self.chunked_decode_streaming(code_tensor, chunk_size=10, left_context_size=10)
         else:
             waveform = self._decode_waveform_from_codes(code_tensor)
 
