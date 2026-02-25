@@ -53,7 +53,9 @@ def _make_finished_sentinel() -> dict[str, Any]:
     return {"code_predictor_codes": [], "finished": torch.tensor(True, dtype=torch.bool)}
 
 
-def llm2code2wav_async_chunk(connector: Any, pooling_output: dict[str, Any], request: Any) -> dict[str, Any] | None:
+def llm2code2wav_async_chunk(
+    transfer_manager: Any, pooling_output: dict[str, Any], request: Any
+) -> dict[str, Any] | None:
     """
     Async chunk version: convert stage-0 pooling_output to code2wav payload (pooling / connector accumulation).
 
@@ -111,8 +113,8 @@ def llm2code2wav_async_chunk(connector: Any, pooling_output: dict[str, Any], req
         return None
 
     chunk_size = left_context_size = 5
-    connector.code_prompt_token_ids[request_id].append(code_list)
-    length = len(connector.code_prompt_token_ids[request_id])
+    transfer_manager.code_prompt_token_ids[request_id].append(code_list)
+    length = len(transfer_manager.code_prompt_token_ids[request_id])
     chunk_length = length % chunk_size
     if chunk_length != 0 and not request.is_finished():
         return None
@@ -122,7 +124,7 @@ def llm2code2wav_async_chunk(connector: Any, pooling_output: dict[str, Any], req
 
     info = {
         "code_predictor_codes": (
-            torch.tensor(connector.code_prompt_token_ids[request_id][-end_index:]).reshape(-1).tolist()
+            torch.tensor(transfer_manager.code_prompt_token_ids[request_id][-end_index:]).reshape(-1).tolist()
         ),
         "finished": torch.tensor(request.is_finished(), dtype=torch.bool),
     }
