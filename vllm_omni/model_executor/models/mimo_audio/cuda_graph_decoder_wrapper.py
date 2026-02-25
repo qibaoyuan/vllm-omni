@@ -175,7 +175,7 @@ class CUDAGraphDecoderWrapper:
         graph_context = self._compute_graph_context(seq_len)
 
         with torch.no_grad():
-            hidden_states_test = self.tokenizer.decode(
+            _ = self.tokenizer.decode(
                 static_input,
                 static_input_length=static_input_length,
                 graph_context=graph_context,
