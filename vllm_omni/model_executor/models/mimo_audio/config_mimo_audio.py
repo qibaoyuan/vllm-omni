@@ -4,6 +4,13 @@ from dataclasses import dataclass
 
 from transformers import PretrainedConfig, Qwen2Config
 
+SPAN_CODEC_START_TOKEN_ID = 151670
+SPAN_CODEC_END_TOKEN_ID = 151672
+TALKER_CODEC_PAD_TOKEN_ID = 151667
+TEXT_GROUP_SIZE = 5
+PAD_GROUP_SIZE = 5
+NO_INTERLEAVE_NEXT_TOKEN_ID = 151671
+
 
 @dataclass
 class MiMoAudioConfig(Qwen2Config):

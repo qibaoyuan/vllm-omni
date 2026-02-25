@@ -5,12 +5,9 @@ from vllm.inputs import TextPrompt
 from vllm.logger import init_logger
 
 from vllm_omni.inputs.data import OmniTokensPrompt
+from vllm_omni.model_executor.models.mimo_audio.config_mimo_audio import TALKER_CODEC_PAD_TOKEN_ID
 
 logger = init_logger(__name__)
-
-TALKER_CODEC_PAD_TOKEN_ID = 8292
-TALKER_CODEC_START_TOKEN_ID = 8293
-TALKER_CODEC_END_TOKEN_ID = 8294
 
 
 def prepend_and_flatten_colmajor(x: torch.Tensor, pad_vec: torch.Tensor) -> torch.Tensor:
@@ -100,7 +97,7 @@ def llm2code2wav_async_chunk(
     if code_tensor.ndim != 4 or code_tensor.shape[-2:] != (8, 4):
         return None
 
-    pad_vec = torch.tensor([151667, 151667, 151667, 151667], device=code_tensor.device, dtype=code_tensor.dtype)
+    pad_vec = torch.tensor([TALKER_CODEC_PAD_TOKEN_ID] * 4, device=code_tensor.device, dtype=code_tensor.dtype)
     code_final = prepend_and_flatten_colmajor(code_tensor, pad_vec)
     code_list = code_final.tolist()
     if sum(code_list) == 0:
@@ -193,7 +190,7 @@ def llm2code2wav(
         else:
             raise ValueError(f"Invalid multimodal_output: {output.multimodal_output}")
 
-        pad_vec = torch.tensor([151667, 151667, 151667, 151667])
+        pad_vec = torch.tensor([TALKER_CODEC_PAD_TOKEN_ID] * 4)
 
         code_final = prepend_and_flatten_colmajor(codec_codes, pad_vec)
         code_final = code_final.tolist()

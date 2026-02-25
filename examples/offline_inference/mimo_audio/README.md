@@ -184,6 +184,45 @@ python3 -u end2end.py \
 
 Note: This task uses hardcoded message lists in the script.
 
+## Troubleshooting
+
+### Audio dependencies (soundfile, librosa)
+
+This example depends on **soundfile** (read/write WAV) and **librosa** (load audio including MP3). Install the project requirements first:
+
+```bash
+pip install -r requirements/common.txt
+# or at least: pip install soundfile>=0.13.1 librosa>=0.11.0
+```
+
+- **`soundfile` / libsndfile not found**  
+  `soundfile` uses the C library **libsndfile**. On Linux, install the system package before pip:
+  - Debian/Ubuntu: `sudo apt-get install libsndfile1`
+  - For development builds: `sudo apt-get install libsndfile1-dev`
+  - Then: `pip install soundfile`
+
+- **`librosa` fails to load MP3 or reports "No backend available"**  
+  Loading MP3 (e.g. in `spoken_dialogue_sft_multiturn` with `.mp3` files) uses **ffmpeg** as the backend. Install ffmpeg:
+  - Debian/Ubuntu: `sudo apt-get install ffmpeg`
+  - macOS: `brew install ffmpeg`
+
+- **`ImportError: No module named 'soundfile'` or `ModuleNotFoundError: ... librosa`**  
+  Ensure you are in the same Python environment where vLLM Omni and the example dependencies are installed, and that `requirements/common.txt` (or the packages above) are installed.
+
+### Tokenizer path
+
+- **`MIMO_AUDIO_TOKENIZER_PATH` not set or model fails to find tokenizer**  
+  Export the tokenizer path before running:
+  ```bash
+  export MIMO_AUDIO_TOKENIZER_PATH="XiaomiMiMo/MiMo-Audio-Tokenizer"
+  ```
+  See [Environment Variables](#environment-variables) in Setup.
+
+### Other
+
+- If the model or stage config fails to load, check [stage configuration documentation](https://docs.vllm.ai/projects/vllm-omni/en/latest/configuration/stage_configs/) for memory and GPU settings.
+- For errors when reading/writing WAV (e.g. unsupported format), ensure input files are standard WAV/MP3 and that `soundfile` is linked to a working libsndfile (see above).
+
 ## Notes
 
 - The script uses default model paths and audio files embedded in `end2end.py`. Update them if your local cache path differs.

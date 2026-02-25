@@ -44,9 +44,17 @@ from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.sampler import Sampler
 
 from vllm_omni.model_executor.custom_process_mixin import CustomProcessMixin
-from vllm_omni.model_executor.models.mimo_audio.config_mimo_audio import MiMoAudioConfig
 from vllm_omni.model_executor.models.mimo_audio.mimo_audio_code2wav import get_tokenizer_worker
 from vllm_omni.model_executor.models.qwen2_5_omni.qwen2_5_omni import OmniOutput
+from vllm_omni.model_executor.models.mimo_audio.config_mimo_audio import (
+    MiMoAudioConfig,
+    SPAN_CODEC_START_TOKEN_ID,
+    SPAN_CODEC_END_TOKEN_ID,
+    TALKER_CODEC_PAD_TOKEN_ID,
+    TEXT_GROUP_SIZE,
+    PAD_GROUP_SIZE,
+    NO_INTERLEAVE_NEXT_TOKEN_ID
+)
 
 logger = init_logger(__name__)
 
@@ -54,12 +62,12 @@ logger = init_logger(__name__)
 def interleave_5_and_5_in_span(
     input_ids: list[int],
     *,
-    span_start_token: int = 151670,
-    span_end_token: int = 151672,
-    pad_token_id: int = 151667,
-    text_group_size: int = 5,
-    pad_group_size: int = 5,
-    no_interleave_next_token: int = 151671,
+    span_start_token: int = SPAN_CODEC_START_TOKEN_ID,
+    span_end_token: int = SPAN_CODEC_END_TOKEN_ID,
+    pad_token_id: int = TALKER_CODEC_PAD_TOKEN_ID,
+    text_group_size: int = TEXT_GROUP_SIZE,
+    pad_group_size: int = PAD_GROUP_SIZE,
+    no_interleave_next_token: int = NO_INTERLEAVE_NEXT_TOKEN_ID,
 ) -> list[int]:
     """
     Interleave text tokens and padding tokens within spans marked by special tokens.
