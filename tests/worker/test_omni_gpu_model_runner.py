@@ -29,8 +29,8 @@ class DummyReqState:
     pass
 
 
-class DummyMiMoAudioModel(torch.nn.Module):
-    """Dummy model whose class name matches MiMoAudioForConditionalGeneration."""
+class MiMoAudioForConditionalGeneration(torch.nn.Module):
+    """Dummy model whose class name must exactly match the production check."""
 
     def __init__(self):
         super().__init__()
@@ -94,7 +94,7 @@ def _make_runner(req_ids=("r1", "r2"), hidden_size=4):
 def _make_runner_for_mimo(req_id="r_mimo"):
     """Create a minimal runner with MiMoAudio-like model and request state."""
     runner = object.__new__(OmniGPUModelRunner)
-    runner.model = DummyMiMoAudioModel()
+    runner.model = MiMoAudioForConditionalGeneration()
 
     # Minimal vllm_config / model_config used by helper.
     class _DummyModelConfig:
