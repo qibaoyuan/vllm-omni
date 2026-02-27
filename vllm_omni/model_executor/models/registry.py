@@ -79,6 +79,12 @@ _OMNI_MODELS = {
         "mimo_audio_code2wav",
         "MiMoAudioToken2WavForConditionalGenerationVLLM",
     ),
+    ## glm_image
+    "GlmImageForConditionalGeneration": (
+        "glm_image",
+        "glm_image_ar",
+        "GlmImageForConditionalGeneration",
+    ),
 }
 
 
