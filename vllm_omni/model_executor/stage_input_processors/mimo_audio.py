@@ -52,7 +52,7 @@ def _make_finished_sentinel() -> dict[str, Any]:
 
 def llm2code2wav_async_chunk(
     transfer_manager: Any,
-    pooling_output: dict[str, Any] | None,
+    pooling_output: dict[str, Any],
     request: Any,
     is_finished: bool = False,
 ) -> dict[str, Any] | None:
