@@ -15,7 +15,7 @@ stage_args:
       model_arch: MiMoAudioForConditionalGeneration
       worker_type: ar
       scheduler_cls: vllm_omni.core.sched.omni_ar_scheduler.OmniARScheduler
-      tensor_parallel_size: 1
+      tensor_parallel_size: 2
       gpu_memory_utilization: 0.3
       enforce_eager: true    # need to discuss
       trust_remote_code: true
@@ -47,7 +47,7 @@ stage_args:
       model_arch: MiMoAudioForConditionalGeneration
       worker_type: generation
       scheduler_cls: vllm_omni.core.sched.omni_generation_scheduler.OmniGenerationScheduler
-      tensor_parallel_size: 1
+      tensor_parallel_size: 2
       gpu_memory_utilization: 0.2
       enforce_eager: true
       trust_remote_code: true
