@@ -12,7 +12,6 @@ from transformers.models.qwen2.modeling_qwen2 import (
     Qwen2Model as TransformerQwen2Model,
 )
 from vllm.config import VllmConfig
-from vllm.distributed import get_tensor_model_parallel_rank, get_tensor_model_parallel_world_size
 from vllm.forward_context import get_forward_context
 from vllm.model_executor.layers.linear import ColumnParallelLinear
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
@@ -557,12 +556,14 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             config.hidden_size,
             bias=False,
             return_bias=False,
+            gather_output=True,
         )
         self.hidden_states_downcast = ColumnParallelLinear(
             config.hidden_size,
             self.local_config.hidden_size,
             bias=False,
             return_bias=False,
+            gather_output=True,
         )
 
         self.lm_head = ColumnParallelLinear(
@@ -570,6 +571,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             config.vocab_size,
             bias=False,
             return_bias=False,
+            gather_output=True,
         )
 
         # Re-encode the sum of multi-layer RVQ embeddings to obtain true Audio Code Embeddings
@@ -760,59 +762,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         inputs_embeds.masked_fill_(is_multimodal.unsqueeze(-1), 0.0)
 
         if multimodal_embeddings is not None and len(multimodal_embeddings) != 0:
-            # Flatten multimodal embeddings: tuple of [N_i, H] -> [sum(N_i), H]
-            mm_flat = torch.cat(
-                [
-                    t.reshape(-1, t.shape[-1]) if isinstance(t, torch.Tensor) and t.dim() >= 2 else t.reshape(1, -1)
-                    for t in multimodal_embeddings
-                ],
-                dim=0,
-            )
-
-            # is_multimodal: [S] or [B, S] -> positions where we should insert mm embeddings
-            pos = is_multimodal.nonzero(as_tuple=False)  # [N, 1] if 1D else [N, 2]
-            num_expected = pos.shape[0]
-            if mm_flat.shape[0] != num_expected:
-                raise ValueError(
-                    f"MiMo multimodal embedding count mismatch: got {mm_flat.shape[0]} "
-                    f"tokens, expected {num_expected} (is_multimodal.sum()). "
-                    "Check that embed_multimodal output matches prompt_ids empty positions."
-                )
-
-            if pos.dim() == 2 and pos.shape[1] == 2:
-                b_idx = pos[:, 0]
-                s_idx = pos[:, 1]
-            else:
-                # is_multimodal was 1D [S] -> single batch, seq indices only
-                b_idx = torch.zeros(num_expected, dtype=torch.long, device=inputs_embeds.device)
-                s_idx = pos[:, 0].to(inputs_embeds.device)
-
-            if inputs_embeds.dim() == 3:
-                dst = inputs_embeds[b_idx, s_idx, :]
-            else:
-                dst = inputs_embeds[s_idx, :]
-
-            hidden_size = inputs_embeds.shape[-1]
-            mm_hidden = mm_flat.shape[-1]
-            if mm_hidden == hidden_size:
-                dst.copy_(mm_flat.to(inputs_embeds.dtype))
-            else:
-                # TP: mm_flat is the local shard from ColumnParallelLinear (e.g. 2048);
-                # inputs_embeds has full hidden (e.g. 4096). Write shard into correct slice.
-                tp_rank = get_tensor_model_parallel_rank()
-                tp_world = get_tensor_model_parallel_world_size()
-                shard_size = hidden_size // tp_world
-                start = tp_rank * shard_size
-                end = start + shard_size
-                if mm_hidden != shard_size:
-                    raise ValueError(
-                        f"MiMo TP shard size mismatch: mm_flat has {mm_hidden}, "
-                        f"expected {shard_size} (hidden_size={hidden_size}, tp={tp_world})"
-                    )
-                if inputs_embeds.dim() == 3:
-                    inputs_embeds[b_idx, s_idx, start:end] = mm_flat.to(inputs_embeds.dtype)
-                else:
-                    inputs_embeds[s_idx, start:end] = mm_flat.to(inputs_embeds.dtype)
+            inputs_embeds = inputs_embeds + multimodal_embeddings
 
         inputs_embeds = inputs_embeds.to(torch.bfloat16)
         return inputs_embeds
@@ -829,13 +779,11 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         if multimodal_embeddings is None or is_multimodal is None:
             return super().embed_input_ids(input_ids)
 
-        # Use MiMo's own merge logic instead of vllm's _merge_multimodal_embeddings.
-        # vllm expects num_mm_tokens == is_multimodal.sum(); MiMo's embed_multimodal
-        # format may differ, and masked_scatter_ triggers CUDA assert on mismatch.
-        return self._embed_input_ids(
+        return super().embed_input_ids(
             input_ids,
             multimodal_embeddings=multimodal_embeddings,
             is_multimodal=is_multimodal,
+            handle_oov_mm_token=handle_oov_mm_token,
         )
 
     def base_local_forward(
@@ -1070,9 +1018,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         **kwargs: object,
     ) -> torch.Tensor | IntermediateTensors:
         _forward_context = get_forward_context()
-        # Keep on CPU to avoid device-side assert when tp>1 (indexing with CPU tensor is valid)
-        _seq_len = int(input_ids.shape[-1])
-        _default_query_start_loc = torch.tensor([0, _seq_len], dtype=torch.long, device="cpu")
+        _default_query_start_loc = torch.tensor([0, input_ids.shape[-1]], device=input_ids.device)
         query_start_loc = (
             next(iter(_forward_context.attn_metadata.values())).query_start_loc
             if _forward_context.attn_metadata is not None
