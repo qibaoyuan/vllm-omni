@@ -33,23 +33,26 @@ from vllm_omni.model_executor.models.mimo_audio.modeling_audio_tokenizer import 
     StreamingConfig,
 )
 
-
 # ──────────────────────── 工具函数 ────────────────────────
 
 
 def build_mel_transform(config, device="cpu"):
     """根据 tokenizer config 构建 MelSpectrogram 变换."""
-    return MelSpectrogram(
-        sample_rate=config.sampling_rate,
-        n_fft=config.nfft,
-        hop_length=config.hop_length,
-        win_length=config.window_size,
-        f_min=config.fmin,
-        f_max=config.fmax,
-        n_mels=config.n_mels,
-        power=1.0,
-        center=True,
-    ).to(device).to(torch.float32)
+    return (
+        MelSpectrogram(
+            sample_rate=config.sampling_rate,
+            n_fft=config.nfft,
+            hop_length=config.hop_length,
+            win_length=config.window_size,
+            f_min=config.fmin,
+            f_max=config.fmax,
+            n_mels=config.n_mels,
+            power=1.0,
+            center=True,
+        )
+        .to(device)
+        .to(torch.float32)
+    )
 
 
 def load_audio(audio_path: str, target_sr: int) -> torch.Tensor:
@@ -74,10 +77,10 @@ def wav_to_mel(wav: torch.Tensor, mel_transform: MelSpectrogram) -> torch.Tensor
 
 @torch.no_grad()
 def encode_audio(
-        tokenizer: MiMoAudioTokenizer,
-        mel_transform: MelSpectrogram,
-        wav: torch.Tensor,
-        device: str = "cpu",
+    tokenizer: MiMoAudioTokenizer,
+    mel_transform: MelSpectrogram,
+    wav: torch.Tensor,
+    device: str = "cpu",
 ):
     """
     将一段音频波形编码为离散码本索引 (codes).
@@ -126,9 +129,9 @@ def decode_codes(tokenizer: MiMoAudioTokenizer, codes: torch.Tensor):
 
 @torch.no_grad()
 def streaming_decode_codes(
-        tokenizer: MiMoAudioTokenizer,
-        codes: torch.Tensor,
-        chunk_size: int = 50,
+    tokenizer: MiMoAudioTokenizer,
+    codes: torch.Tensor,
+    chunk_size: int = 50,
 ):
     """
     将离散码分块后进行流式解码，模拟实时合成场景.
@@ -152,7 +155,7 @@ def streaming_decode_codes(
         start = i * chunk_size
         end = min(start + chunk_size, total_tokens)
         chunk_codes = codes[:, start:end]
-        is_last = (i == num_chunks - 1)
+        is_last = i == num_chunks - 1
 
         chunk_lengths = [chunk_codes.shape[-1]]
         wavs, cache = tokenizer.streaming_decode(
@@ -173,39 +176,52 @@ def streaming_decode_codes(
 
 # ──────────────────────── 主流程 ────────────────────────
 
-path_ = """ 
+"""
 export CODE_DIR="/mnt/user/qibaoyuan/vllm-omni-qby/"
 export MODEL_DIR="/mnt/user/qibaoyuan"
+export MIMO_AUDIO_TOKENIZER_PATH="/mnt/user/qibaoyuan/MiMo-Audio-Tokenizer"
+
 cd /mnt/user/qibaoyuan/vllm-omni-qby/examples/offline_inference/mimo_audio/
 python3 -u audio_tokenizer_example.py  --tokenizer-path ${MIMO_AUDIO_TOKENIZER_PATH} \
 --audio-path /mnt/user/qibaoyuan/vllm-omni-qby/examples/offline_inference/mimo_audio/自然对话_闺蜜闲聊_剪.wav
+
 """
 
 
 def main():
     parser = argparse.ArgumentParser(description="MiMoAudioTokenizer 使用示例")
     parser.add_argument(
-        "--tokenizer-path", type=str,
+        "--tokenizer-path",
+        type=str,
         default="/Users/qibaoyuan/Documents/llm/MiMo-Audio-Tokenizer",
     )
     parser.add_argument(
-        "--audio-path", type=str,
+        "--audio-path",
+        type=str,
         default="/Users/qibaoyuan/PycharmProjects/vllm-omni-qby/examples/offline_inference/mimo_audio/自然对话_闺蜜闲聊_剪.wav",
     )
     parser.add_argument(
-        "--output-path", type=str, default="reconstructed.wav",
+        "--output-path",
+        type=str,
+        default="reconstructed.wav",
         help="重建音频保存路径",
     )
     parser.add_argument(
-        "--streaming-output-path", type=str, default="reconstructed_streaming.wav",
+        "--streaming-output-path",
+        type=str,
+        default="reconstructed_streaming.wav",
         help="流式重建音频保存路径",
     )
     parser.add_argument(
-        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
+        "--device",
+        type=str,
+        default="cuda" if torch.cuda.is_available() else "cpu",
         help="推理设备 (cpu / cuda)",
     )
     parser.add_argument(
-        "--chunk-size", type=int, default=50,
+        "--chunk-size",
+        type=int,
+        default=50,
         help="流式解码每个 chunk 的 token 数",
     )
     args = parser.parse_args()
