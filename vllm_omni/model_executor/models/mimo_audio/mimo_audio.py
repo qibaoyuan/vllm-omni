@@ -255,7 +255,7 @@ class MiMoAudioLLMDummyInputsBuilder(BaseDummyInputsBuilder[MiMoAudioLLMProcessi
 
         dummy_processor_inputs = ProcessorInputs(
             prompt=dummy_text,
-            mm_items=dummy_mm_items,
+            mm_data_items=dummy_mm_items,
         )
 
         return dummy_processor_inputs
