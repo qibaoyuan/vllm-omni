@@ -309,10 +309,6 @@ class MiMoAudioDataParser(MultiModalDataParser):
         if data is None:
             return AudioProcessorItems(None)
 
-        # also check single audio item with sampling rate
-        if self._is_empty(data) or (isinstance(data, tuple) and self._is_empty(data[0])):
-            return None
-
         if (
             is_list_of(data, float)
             or isinstance(data, (np.ndarray, torch.Tensor))
