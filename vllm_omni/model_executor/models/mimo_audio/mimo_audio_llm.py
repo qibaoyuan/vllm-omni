@@ -1124,7 +1124,20 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             logits = text_logits[:, -1, :].clone()
         return logits
 
+    @staticmethod
+    def _load_param_direct(param: torch.nn.Parameter, loaded_weight: torch.Tensor) -> None:
+        """Load weight directly into param, reshaping if element counts match."""
+        # AIGC START
+        if param.data.shape == loaded_weight.shape:
+            param.data.copy_(loaded_weight)
+        elif param.data.numel() == loaded_weight.numel():
+            param.data.copy_(loaded_weight.reshape(param.data.shape))
+        else:
+            raise ValueError(f"Shape mismatch: param {param.data.shape} vs loaded {loaded_weight.shape}")
+        # AIGC END
+
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        # AIGC START
         stacked_params_mapping = [
             ("qkv_proj", "q_proj", "q"),
             ("qkv_proj", "k_proj", "k"),
@@ -1133,23 +1146,20 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             ("gate_up_proj", "up_proj", 1),
         ]
         params_dict = dict(self.named_parameters(remove_duplicate=False))
-        print('params_dict_keys',params_dict.keys())
-        print('self.quant_config', self.quant_config)
         loaded_params: set[str] = set()
         for name, loaded_weight in weights:
+            if "rotary_emb.inv_freq" in name:
+                continue
+
             if name.startswith("model."):
                 name = "model." + name
 
-            print('weight_key_name',name)
-
             if self.quant_config is not None and (scale_name := self.quant_config.get_cache_scale(name)):
-                # Loading kv cache quantization scales
                 param = params_dict[scale_name]
                 weight_loader = getattr(param, "weight_loader", default_weight_loader)
                 loaded_weight = loaded_weight if loaded_weight.dim() == 0 else loaded_weight[0]
                 weight_loader(param, loaded_weight)
                 loaded_params.add(scale_name)
-                print('quant ,scale_name',scale_name)
                 continue
 
             for param_name, weight_name, shard_id in stacked_params_mapping:
@@ -1157,36 +1167,49 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
                     continue
                 if weight_name not in name:
                     continue
-                name = name.replace(weight_name, param_name)
-                # Skip loading extra bias for GPTQ models.
-                if name.endswith(".bias") and name not in params_dict:
+                mapped = name.replace(weight_name, param_name)
+                if mapped.endswith(".bias") and mapped not in params_dict:
                     continue
-                if is_pp_missing_parameter(name, self):
+                if is_pp_missing_parameter(mapped, self):
                     continue
-                param = params_dict[name]
+                if mapped.endswith("scale"):
+                    mapped = maybe_remap_kv_scale_name(mapped, params_dict)
+                    if mapped is None:
+                        continue
+                param = params_dict.get(mapped)
+                if param is None:
+                    continue
+                if loaded_weight.ndim != param.data.ndim:
+                    if loaded_weight.ndim == 1 and param.data.ndim == 2:
+                        loaded_weight = loaded_weight.unsqueeze(-1)
+                    elif loaded_weight.ndim == 2 and param.data.ndim == 1:
+                        loaded_weight = loaded_weight.squeeze(-1)
                 weight_loader = getattr(param, "weight_loader", default_weight_loader)
                 if weight_loader == default_weight_loader:
                     weight_loader(param, loaded_weight)
                 else:
                     weight_loader(param, loaded_weight, shard_id)
+                loaded_params.add(mapped)
                 break
             else:
-                # Skip loading extra bias for GPTQ models.
-                if name.endswith(".bias") and name not in params_dict:
+                mapped = maybe_remap_kv_scale_name(name, params_dict)
+                if mapped is None:
                     continue
-                # Remapping the name of FP8 kv-scale.
-                name = maybe_remap_kv_scale_name(name, params_dict)
-                if name is None:
+                if name.endswith(".bias") and mapped not in params_dict:
                     continue
-                if is_pp_missing_parameter(name, self):
+                if is_pp_missing_parameter(mapped, self):
                     continue
-                if name not in params_dict:
+                param = params_dict.get(mapped)
+                if param is None:
                     continue
-                param = params_dict[name]
-                weight_loader = getattr(param, "weight_loader", default_weight_loader)
-                weight_loader(param, loaded_weight)
-            loaded_params.add(name)
+                if mapped.endswith("_scale") or mapped.endswith("_zero_point"):
+                    self._load_param_direct(param, loaded_weight)
+                else:
+                    weight_loader = getattr(param, "weight_loader", default_weight_loader)
+                    weight_loader(param, loaded_weight)
+                loaded_params.add(mapped)
         return loaded_params
+        # AIGC END
 
     def apply_input_local_transformer(self, speech_embeddings: torch.Tensor) -> torch.Tensor:
         B, T_groups, group_size, hidden_size = speech_embeddings.shape
