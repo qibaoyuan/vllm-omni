@@ -19,7 +19,10 @@ from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.sampler import Sampler
 
 from vllm_omni.model_executor.models.mimo_audio.config_mimo_audio import TALKER_CODEC_PAD_TOKEN_ID, MiMoAudioConfig
-from vllm_omni.model_executor.models.mimo_audio.modeling_audio_tokenizer import MiMoAudioTokenizer
+from vllm_omni.model_executor.models.mimo_audio.modeling_audio_tokenizer import (
+    CUDAGraphAudioTokenizerWrapper,
+    MiMoAudioTokenizer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +106,11 @@ class MiMoAudioTokenizerWorker:
         self.audio_channels = self.config.audio_channels
         self.sample_rate = self.audio_tokenizer.config.sampling_rate
 
+        # AIGC START
+        self._cudagraph_wrapper: CUDAGraphAudioTokenizerWrapper | None = None
+        enable_cudagraph = os.environ.get("MIMO_AUDIO_TOKENIZER_CUDAGRAPH", "1") != "0"
+        # AIGC END
+
         # Warmup (skip for CPU due to potential shape mismatch issues)
         if device_str != "cpu":
             logger.info("[tokenizer worker] Running warmup encode/decode...")
@@ -117,6 +125,31 @@ class MiMoAudioTokenizerWorker:
                 )
             except Exception as e:
                 logger.warning("[tokenizer worker] Warmup failed (non-critical): %s", str(e))
+
+            # AIGC START
+            if enable_cudagraph:
+                logger.info("[tokenizer worker] Initializing CUDAGraph for audio tokenizer decode...")
+                cudagraph_start = time.monotonic()
+                try:
+                    self._cudagraph_wrapper = CUDAGraphAudioTokenizerWrapper(
+                        tokenizer=self.audio_tokenizer,
+                        enabled=True,
+                    )
+                    self._cudagraph_wrapper.warmup(
+                        device=torch.device(self.device),
+                        dtype=torch.long,
+                    )
+                    logger.info(
+                        "[tokenizer worker] CUDAGraph warmup finished in %.2fs",
+                        time.monotonic() - cudagraph_start,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "[tokenizer worker] CUDAGraph warmup failed (non-critical, falling back to eager): %s",
+                        str(e),
+                    )
+                    self._cudagraph_wrapper = None
+            # AIGC END
         else:
             logger.info("[tokenizer worker] Skipping warmup for CPU device")
 
@@ -255,8 +288,13 @@ class MiMoAudioTokenizerWorker:
     ) -> torch.Tensor:
         """Decode audio tokens to waveform using the tokenizer's decoder"""
         tokens = tokens.to(self.device)
-        with torch.no_grad():
-            decoded_audio: torch.Tensor = self.audio_tokenizer.decode(tokens)
+        # AIGC START
+        if self._cudagraph_wrapper is not None:
+            decoded_audio: torch.Tensor = self._cudagraph_wrapper.decode(tokens)
+        else:
+            with torch.no_grad():
+                decoded_audio = self.audio_tokenizer.decode(tokens)
+        # AIGC END
         decoded_audio = decoded_audio.float().reshape(-1).detach().cpu()
         return decoded_audio  # [samples] cpu
 

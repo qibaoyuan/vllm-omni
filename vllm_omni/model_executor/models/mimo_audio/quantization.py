@@ -355,13 +355,19 @@ class ResidualVectorQuantization(nn.Module):
         out_indices = torch.stack(all_indices)
         return out_indices
 
+    # AIGC START
     def decode(self, q_indices: torch.Tensor, st: int = 0) -> torch.Tensor:
-        quantized_out = torch.tensor(0.0, device=q_indices.device)
+        quantized_out = None
         for i, indices in enumerate(q_indices):
             layer = self.layers[st + i]
             quantized = layer.decode(indices)
-            quantized_out = quantized_out + quantized
+            if quantized_out is None:
+                quantized_out = quantized
+            else:
+                quantized_out = quantized_out + quantized
         return quantized_out
+
+    # AIGC END
 
 
 class ResidualVectorQuantizer(nn.Module):

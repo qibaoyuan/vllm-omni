@@ -28,6 +28,7 @@ import torchaudio
 from torchaudio.transforms import MelSpectrogram
 
 from vllm_omni.model_executor.models.mimo_audio.modeling_audio_tokenizer import (
+    CUDAGraphAudioTokenizerWrapper,
     MiMoAudioTokenizer,
     StreamingCache,
     StreamingConfig,
@@ -98,7 +99,7 @@ def encode_audio(
     mel = wav_to_mel(wav, mel_transform).to(device)  # (seq_len, n_mels)
     input_lens = torch.tensor([mel.shape[0]], device=device)
 
-    codes, output_length = tokenizer.encoder.encode(
+    codes, output_length = tokenizer.encode(
         input_features=mel,
         input_lens=input_lens,
         return_codes_only=True,
@@ -237,6 +238,16 @@ def main():
         device_map={"": device},
     )
     tokenizer.eval()
+
+    _cudagraph_wrapper = CUDAGraphAudioTokenizerWrapper(
+        tokenizer=tokenizer,
+        enabled=True,
+    )
+    _cudagraph_wrapper.warmup(
+        device=torch.device(device),
+        dtype=torch.long,
+    )
+
     if device != "cpu":
         tokenizer.to(dtype=torch.bfloat16)
     print(f"      加载完成，耗时 {time.time() - t0:.2f}s")
@@ -256,11 +267,20 @@ def main():
     # ── Step 3: 编码 ──
     print("\n[3/5] 编码音频 → 离散码 ...")
     t0 = time.time()
-    codes, output_length = encode_audio(tokenizer, mel_transform, wav, device)
+    codes, output_length = encode_audio(tokenizer.encoder, mel_transform, wav, device)
     print(f"      codes shape: {codes.shape}  (num_quantizers × tokens)")
     print(f"      output_length: {output_length}")
     print(f"      压缩比: {wav.shape[0] / codes.shape[-1]:.1f}x")
     print(f"      编码耗时: {time.time() - t0:.3f}s")
+
+    # ── Step 3: 编码cg ──
+    # print("\n[3/5] 编码音频 → 离散码 ...")
+    # t0 = time.time()
+    # codes, output_length = encode_audio(_cudagraph_wrapper , mel_transform, wav, device)
+    # print(f"      cg codes shape: {codes.shape}  (num_quantizers × tokens)")
+    # print(f"      cg output_length: {output_length}")
+    # print(f"      cg压缩比: {wav.shape[0] / codes.shape[-1]:.1f}x")
+    # print(f"      cg编码耗时: {time.time() - t0:.3f}s")
 
     # ── Step 4: 非流式解码 ──
     print("\n[4/5] 解码离散码 → 波形（非流式）...")
@@ -272,6 +292,17 @@ def main():
 
     sf.write(args.output_path, recon_wav_np, tokenizer.sampling_rate, format="WAV")
     print(f"      已保存: {args.output_path}")
+
+    # ── Step 4: 非流式解码 ──
+    print("\n[4/5] cg解码离散码 → 波形（非流式）...")
+    t0 = time.time()
+    recon_wav = decode_codes(_cudagraph_wrapper, codes)
+    recon_wav_np = recon_wav.float().detach().cpu().numpy().flatten()
+    print(f"      cg 重建波形长度: {len(recon_wav_np)} 采样点")
+    print(f"      cg 解码耗时: {time.time() - t0:.3f}s")
+
+    sf.write(args.output_path + ".cg.wav", recon_wav_np, tokenizer.sampling_rate, format="WAV")
+    print(f"      cg 已保存: {args.output_path + '.cg.wav'}")
 
     # ── Step 5: 流式解码 ──
     print(f"\n[5/5] 流式解码（chunk_size={args.chunk_size}）...")
