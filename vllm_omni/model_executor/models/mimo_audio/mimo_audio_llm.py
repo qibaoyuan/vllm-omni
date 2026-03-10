@@ -58,6 +58,52 @@ from vllm_omni.platforms import current_omni_platform
 
 logger = logging.getLogger(__name__)
 
+
+try:
+    import bitsandbytes as bnb
+
+    HAS_BNB = True
+except ImportError:
+    HAS_BNB = False
+
+
+def _replace_linear_with_bnb(
+    module: nn.Module,
+    *,
+    load_in_8bit: bool = True,
+) -> None:
+    """
+    将模块内所有 nn.Linear 替换为 bitsandbytes 的 8bit/4bit 线性层以节省显存。
+    要求：替换前该模块的 Linear 权重已加载完成；替换后需对模块调用 .to(device) 以触发量化。
+    """
+    if not HAS_BNB:
+        raise ImportError("bitsandbytes is required for MiMo bnb quantization. Install with: pip install bitsandbytes")
+    for name, child in list(module.named_children()):
+        print("replacing", name, "with bnb linear")
+        if isinstance(child, nn.Linear):
+            in_feat = child.in_features
+            out_feat = child.out_features
+            bias = child.bias is not None
+            if load_in_8bit:
+                new_linear = bnb.nn.Linear8bitLt(
+                    in_feat,
+                    out_feat,
+                    bias=bias,
+                    has_fp16_weights=False,
+                )
+            else:
+                new_linear = bnb.nn.Linear4bit(
+                    in_feat,
+                    out_feat,
+                    bias=bias,
+                    quant_type="nf4",
+                )
+            new_linear.load_state_dict(child.state_dict(), strict=False)
+            setattr(module, name, new_linear)
+        else:
+            _replace_linear_with_bnb(child, load_in_8bit=load_in_8bit)
+
+
 # CUDA Graph buckets for MiMo local decoding / input_local_transformer.
 # We keep the list small to balance warmup time and runtime coverage.
 MIMO_CUDAGRAPH_BATCH_SIZES: tuple[int, ...] = (1, 2, 4, 6, 8, 16, 32, 64, 128)
@@ -550,7 +596,18 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
 
         self.local_config = config.local_config()
         self.input_local_config = config.input_local_config()
-
+        self._use_bnb_local_transformers = getattr(config, "use_bnb_local_transformers", False)
+        self._bnb_local_8bit = getattr(config, "bnb_local_bits", 8) == 8
+        _bnb_cfg = getattr(config, "bitsandbytes_config", None)
+        if isinstance(_bnb_cfg, dict):
+            if not self._use_bnb_local_transformers and (_bnb_cfg.get("load_in_4bit") or _bnb_cfg.get("load_in_8bit")):
+                self._use_bnb_local_transformers = True
+            if _bnb_cfg.get("load_in_4bit"):
+                self._bnb_local_8bit = False
+            elif _bnb_cfg.get("load_in_8bit"):
+                self._bnb_local_8bit = True
+        print("_use_bnb_local_transformers", self._use_bnb_local_transformers)
+        print("_bnb_local_8bit", self._bnb_local_8bit)
         self.speech_group_downcast = ColumnParallelLinear(
             self.input_local_config.hidden_size * config.group_size,
             config.hidden_size,
@@ -643,9 +700,21 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             persistent=False,
         )
 
-        # CUDA Graph cache for local_forward (includes self.local_transformer inside base_local_forward).
+        # CUDA Graph caches — lazy-captured on first forward to ensure weights
+        # (including BNB quantized replacements) are already in their final state.
         self.local_forward_cg_by_bs: dict[int, MiMoLocalDecodeCudaGraph] = {}
         self.local_forward_buf_by_bs: dict[int, MiMoLocalDecodeBuffer] = {}
+        self._local_forward_cg_initialized = False
+
+        self.input_local_transformer_cg_by_bs: dict[int, MiMoInputLocalTransformerCudaGraph] = {}
+        self.input_local_transformer_buf_by_bs: dict[int, MiMoInputLocalTransformerBuffer] = {}
+        self._input_local_transformer_cg_initialized = False
+
+    def _ensure_local_forward_cg(self) -> None:
+        """Lazy-capture CUDA graphs for local_forward on first call."""
+        if self._local_forward_cg_initialized:
+            return
+        self._local_forward_cg_initialized = True
         try:
             if torch.cuda.is_available() and next(self.hidden_states_downcast.parameters()).device.type == "cuda":
                 for bs in MIMO_CUDAGRAPH_BATCH_SIZES:
@@ -668,9 +737,11 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             self.local_forward_cg_by_bs.clear()
             self.local_forward_buf_by_bs.clear()
 
-        # CUDA Graph cache for input_local_transformer (re-encode grouped RVQ embeddings).
-        self.input_local_transformer_cg_by_bs: dict[int, MiMoInputLocalTransformerCudaGraph] = {}
-        self.input_local_transformer_buf_by_bs: dict[int, MiMoInputLocalTransformerBuffer] = {}
+    def _ensure_input_local_transformer_cg(self) -> None:
+        """Lazy-capture CUDA graphs for input_local_transformer on first call."""
+        if self._input_local_transformer_cg_initialized:
+            return
+        self._input_local_transformer_cg_initialized = True
         try:
             if torch.cuda.is_available() and next(self.input_local_transformer.parameters()).device.type == "cuda":
                 for bs in MIMO_CUDAGRAPH_BATCH_SIZES:
@@ -852,6 +923,8 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         if local_sampler is None:
             local_sampler = MiMoSampler(do_sample=False, temperature=0.6, top_p=0.9)
 
+        self._ensure_local_forward_cg()
+
         b = int(local_embeds.shape[0])
         use_cg = (local_sampler.do_sample is None or local_sampler.do_sample is False) and bool(
             self.local_forward_cg_by_bs
@@ -983,6 +1056,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             new_audio_emb += cur_speech_embeds
 
         input_local_in = new_audio_emb.reshape(B * T_groups, group_size, hidden_size)
+        self._ensure_input_local_transformer_cg()
         use_cg = bool(self.input_local_transformer_cg_by_bs)
         new_audio_emb_last_hidden: torch.Tensor
         if use_cg:
@@ -1127,17 +1201,66 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
     @staticmethod
     def _load_param_direct(param: torch.nn.Parameter, loaded_weight: torch.Tensor) -> None:
         """Load weight directly into param, reshaping if element counts match."""
-        # AIGC START
         if param.data.shape == loaded_weight.shape:
             param.data.copy_(loaded_weight)
         elif param.data.numel() == loaded_weight.numel():
             param.data.copy_(loaded_weight.reshape(param.data.shape))
         else:
             raise ValueError(f"Shape mismatch: param {param.data.shape} vs loaded {loaded_weight.shape}")
-        # AIGC END
+
+    def _load_bnb_quantized_weights(
+        self,
+        bnb_buffers: dict[str, dict[str, torch.Tensor]],
+        params_dict: dict[str, torch.nn.Parameter],
+        loaded_params: set[str],
+    ) -> None:
+        """反量化 BNB 量化权重(4-bit NF4 / 8-bit blockwise)并加载到模型参数中。"""
+        for base_key, buf in bnb_buffers.items():
+            if "weight" not in buf or "absmax" not in buf:
+                logger.warning(f"Incomplete BNB quant state for {base_key}, skipping")
+                continue
+
+            quantized = buf["weight"]
+            absmax = buf["absmax"]
+            code = buf["quant_map"]
+            blocksize = int(buf["blocksize"].item())
+            original_shape = tuple(buf["shape"].tolist())
+
+            expected_numel = 1
+            for s in original_shape:
+                expected_numel *= s
+            is_4bit = quantized.numel() < expected_numel
+
+            if is_4bit:
+                from bitsandbytes.functional import QuantState, dequantize_4bit
+
+                quant_state = QuantState(
+                    absmax=absmax,
+                    shape=torch.Size(original_shape),
+                    blocksize=blocksize,
+                    code=code,
+                    quant_type="nf4",
+                    dtype=torch.float16,
+                )
+                dequantized = dequantize_4bit(quantized, quant_state)
+            else:
+                dequantized = code[quantized.long().flatten()]
+                n = dequantized.numel()
+                absmax_expanded = absmax.repeat_interleave(blocksize)[:n]
+                dequantized = dequantized * absmax_expanded
+
+            dequantized = dequantized.reshape(original_shape).to(torch.bfloat16)
+
+            param = params_dict.get(base_key)
+            if param is not None:
+                weight_loader = getattr(param, "weight_loader", default_weight_loader)
+                weight_loader(param, dequantized)
+                loaded_params.add(base_key)
+                logger.info(f"Loaded dequantized BNB weight: {base_key} shape={original_shape}")
+            else:
+                logger.warning(f"BNB weight {base_key} has no matching model parameter")
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
-        # AIGC START
         stacked_params_mapping = [
             ("qkv_proj", "q_proj", "q"),
             ("qkv_proj", "k_proj", "k"),
@@ -1147,8 +1270,31 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
         ]
         params_dict = dict(self.named_parameters(remove_duplicate=False))
         loaded_params: set[str] = set()
+        bnb_buffers: dict[str, dict[str, torch.Tensor]] = {}
+        _BNB_MODULE_PREFIXES = ("local_transformer.", "input_local_transformer.", "local_transformer_lm_heads.")
         for name, loaded_weight in weights:
             if "rotary_emb.inv_freq" in name:
+                continue
+
+            _bnb_state_suffix = None
+            for _suffix in (".absmax", ".quant_map", ".blocksize", ".shape"):
+                if name.endswith(_suffix):
+                    _bnb_state_suffix = _suffix
+                    break
+            if _bnb_state_suffix is not None:
+                _base_key = name[: -len(_bnb_state_suffix)]
+                if any(_base_key.startswith(p) for p in _BNB_MODULE_PREFIXES):
+                    bnb_buffers.setdefault(_base_key, {})[_bnb_state_suffix[1:]] = loaded_weight
+                    continue
+
+            if (
+                loaded_weight.dtype in (torch.uint8, torch.int8)
+                and name.endswith(".weight")
+                and any(name.startswith(p) for p in _BNB_MODULE_PREFIXES)
+                and "norm" not in name.lower()
+                and "embed" not in name.lower()
+            ):
+                bnb_buffers.setdefault(name, {})["weight"] = loaded_weight
                 continue
 
             if name.startswith("model."):
@@ -1208,8 +1354,17 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
                     weight_loader = getattr(param, "weight_loader", default_weight_loader)
                     weight_loader(param, loaded_weight)
                 loaded_params.add(mapped)
+        if bnb_buffers:
+            if not HAS_BNB:
+                logger.warning(
+                    "Found BNB quantized weights but bitsandbytes is not installed. These weights will be skipped."
+                )
+            else:
+                self._load_bnb_quantized_weights(bnb_buffers, params_dict, loaded_params)
+        if self._use_bnb_local_transformers and HAS_BNB:
+            _replace_linear_with_bnb(self.local_transformer, load_in_8bit=self._bnb_local_8bit)
+            self.local_transformer.to(self.device)
         return loaded_params
-        # AIGC END
 
     def apply_input_local_transformer(self, speech_embeddings: torch.Tensor) -> torch.Tensor:
         B, T_groups, group_size, hidden_size = speech_embeddings.shape
