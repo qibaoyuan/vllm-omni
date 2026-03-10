@@ -1131,6 +1131,20 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             ("gate_up_proj", "gate_proj", 0),
             ("gate_up_proj", "up_proj", 1),
         ]
+        # Skip loading extra parameters for GPTQ/modelopt models.
+        ignore_suffixes = (
+            ".bias",
+            "_bias",
+            ".k_scale",
+            "_k_scale",
+            ".v_scale",
+            "_v_scale",
+            ".weight_scale",
+            "_weight_scale",
+            ".input_scale",
+            "_input_scale",
+            ".weight_scale_inv",
+        )
         params_dict = dict(self.named_parameters(remove_duplicate=False))
 
         loaded_params: set[str] = set()
@@ -1138,12 +1152,6 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
             if name.startswith("model."):
                 name = "model." + name
 
-            print(
-                "self.quant_config.get_cache_scale(name)",
-                "weight_key_name",
-                name,
-                self.quant_config.get_cache_scale(name),
-            )
             if self.quant_config is not None and (scale_name := self.quant_config.get_cache_scale(name)):
                 # Loading kv cache quantization scales
                 param = params_dict[scale_name]
@@ -1160,7 +1168,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
                     continue
                 name = name.replace(weight_name, param_name)
                 # Skip loading extra bias for GPTQ models.
-                if name.endswith(".bias") and name not in params_dict:
+                if name.endswith(ignore_suffixes) and name not in params_dict:
                     continue
                 if is_pp_missing_parameter(name, self):
                     continue
@@ -1173,7 +1181,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
                 break
             else:
                 # Skip loading extra bias for GPTQ models.
-                if name.endswith(".bias") and name not in params_dict:
+                if name.endswith(ignore_suffixes) and name not in params_dict:
                     continue
                 # Remapping the name of FP8 kv-scale.
                 name = maybe_remap_kv_scale_name(name, params_dict)
@@ -1181,7 +1189,7 @@ class MiMoAudioLLMForConditionalGeneration(nn.Module, SupportsMultiModal, Suppor
                     continue
                 if is_pp_missing_parameter(name, self):
                     continue
-                if name not in params_dict:
+                if name.endswith(ignore_suffixes) and name not in params_dict:
                     continue
                 param = params_dict[name]
                 weight_loader = getattr(param, "weight_loader", default_weight_loader)
