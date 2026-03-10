@@ -31,8 +31,6 @@ class MiMoAudioConfig(Qwen2Config):
         input_local_layers: int = 6,
         input_local_dim: int | None = None,
         input_full_attention: bool | None = None,
-        use_bnb_local_transformers: bool = False,
-        bnb_local_bits: int = 8,
         **kwargs,
     ):
         super().__init__(
@@ -57,8 +55,6 @@ class MiMoAudioConfig(Qwen2Config):
         self.input_local_dim = input_local_dim or local_dim
 
         self.input_full_attention = input_full_attention
-        self.use_bnb_local_transformers = use_bnb_local_transformers
-        self.bnb_local_bits = bnb_local_bits
 
     def _parse_maybe_list(self, value: str | int, length: int) -> list[int]:
         if isinstance(value, str) and "-" in value:
