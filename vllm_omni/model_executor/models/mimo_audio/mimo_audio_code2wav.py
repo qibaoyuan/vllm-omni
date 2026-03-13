@@ -441,8 +441,8 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
     def chunked_decode_streaming(
         self,
         codes: torch.Tensor,
-        chunk_size: int = 10,
-        left_context_size: int = 10,
+        chunk_size: int = 3,
+        left_context_size: int = 3,
     ) -> torch.Tensor:
         """
         Decode one chunk of codes and return waveform with left context removed.
@@ -481,7 +481,7 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
             raise ValueError("code_tensor is empty.")
 
         if getattr(self.vllm_config.model_config, "async_chunk", False):
-            waveform = self.chunked_decode_streaming(code_tensor, chunk_size=10, left_context_size=10)
+            waveform = self.chunked_decode_streaming(code_tensor, chunk_size=3, left_context_size=3)
         else:
             waveform = self._decode_waveform_from_codes(code_tensor)
 

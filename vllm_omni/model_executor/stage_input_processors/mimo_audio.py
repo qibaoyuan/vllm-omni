@@ -112,7 +112,7 @@ def llm2code2wav_async_chunk(
     if request_id is None:
         return None
 
-    chunk_size = left_context_size = 10
+    chunk_size = left_context_size = 3
     transfer_manager.code_prompt_token_ids[request_id].append(code_list)
     length = len(transfer_manager.code_prompt_token_ids[request_id])
     chunk_length = length % chunk_size
