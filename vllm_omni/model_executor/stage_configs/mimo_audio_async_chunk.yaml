@@ -8,7 +8,7 @@ stage_args:
     runtime:
       process: true           # Run this stage in a separate process
       devices: "0"            # Visible devices for this stage (CUDA_VISIBLE_DEVICES/torch.cuda.set_device)
-      max_batch_size: 1
+      max_batch_size: 20
     engine_args:
       dtype: bfloat16
       model_stage: fused_thinker_talker
@@ -41,7 +41,7 @@ stage_args:
     runtime:
       process: true            # Run this stage in a separate process
       devices: "0"            # Visible devices for this stage (CUDA_VISIBLE_DEVICES/torch.cuda.set_device)
-      max_batch_size: 1
+      max_batch_size: 20
     engine_args:
       model_stage: code2wav
       model_arch: MiMoAudioForConditionalGeneration
