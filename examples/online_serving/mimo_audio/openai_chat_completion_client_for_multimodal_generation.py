@@ -17,7 +17,17 @@ from vllm.utils.argparse_utils import FlexibleArgumentParser
 # Modify OpenAI's API key and API base to use vLLM's API server.
 openai_api_key = "EMPTY"
 openai_api_base = "http://localhost:18091/v1"
+openai_api_key = "EMPTY"
+openai_api_base = "http://10.38.244.193:18091/v1"
+# openai_api_base = "http://10.53.174.134:8091/v1"
+openai_api_base = "http://10.19.53.144:8091/v1"  # 2 h20
+# openai_api_base = "http://10.83.66.143:8091/v1"  # 1 gm403
+openai_api_base = "http://10.83.67.150:8091/v1"
 
+os.environ["HTTP_PROXY"] = "http://proxy.pt.xiaomi.com:80"
+os.environ["HTTPS_PROXY"] = "http://proxy.pt.xiaomi.com:80"
+os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1"
+os.environ["no_proxy"] = "localhost,127.0.0.1,::1"
 
 # Modify OpenAI's API key and API base to use vLLM's API server.
 
@@ -286,6 +296,7 @@ query_map = {
 
 def run_multimodal_generation(args) -> None:
     model_name = "MiMo-Audio-7B-Instruct"
+    # model_name = "Qwen2-7B-Instruct-FP8-A16"
     thinker_sampling_params = {
         "temperature": 0.0,  # Deterministic - no randomness
         "top_p": 1.0,  # Disable nucleus sampling
@@ -515,6 +526,7 @@ def parse_args():
         type=str,
         # default="../../offline_inference/mimo_audio/message_base64_wav.json",
         default="../../offline_inference/mimo_audio/message_base64_wav_tts.json",
+        # default="../../offline_inference/mimo_audio/message_base64_chat.json",
         help="Path to message.json file containing conversation history. When provided, "
         "system prompt and multi_audios query will be loaded from this file.",
     )
@@ -527,7 +539,7 @@ def parse_args():
     )
     parser.add_argument(
         "--stream",
-        action="store_true",
+        action="store_false",
         help="Stream the response.",
     )
     parser.add_argument(
