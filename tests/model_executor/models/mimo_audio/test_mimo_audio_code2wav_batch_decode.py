@@ -10,16 +10,16 @@ import torch
 from vllm_omni.model_executor.models.mimo_audio.config_mimo_audio import TALKER_CODEC_PAD_TOKEN_ID
 from vllm_omni.model_executor.models.mimo_audio.mimo_audio_code2wav import (
     AudioStreamerConfig,
-    DUMMY_CODE_SHAPE,
     MiMoAudioToken2WavForConditionalGenerationVLLM,
+    flat_codec_group_element_count,
 )
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 _GROUP = 4
 _AC = 8
-_GROUP_WIDTH = _GROUP * (_AC + 1)  # 36, matches DUMMY_CODE_SHAPE
-_FPT = 2 * 2 * 240  # frames_per_token from mocked tokenizer.config
+_GROUP_WIDTH = flat_codec_group_element_count(_GROUP, _AC)
+_FTP = 2 * 2 * 240  # frames_per_token from mocked tokenizer.config
 
 
 def _codes_ns(empty: int = 555, eostm: int = 666):
@@ -27,8 +27,8 @@ def _codes_ns(empty: int = 555, eostm: int = 666):
 
 
 def _make_dummy_code_tensor() -> torch.Tensor:
-    """36-element pad-only talker dummy; matches _check_dummy_code_tensor."""
-    t = torch.zeros(DUMMY_CODE_SHAPE, dtype=torch.long)
+    """Pad-only talker dummy; matches _check_dummy_code_tensor."""
+    t = torch.zeros(flat_codec_group_element_count(_GROUP, _AC), dtype=torch.long)
     t = t.view(_GROUP, _AC + 1)
     t[:, 0] = TALKER_CODEC_PAD_TOKEN_ID
     return t.view(-1)
@@ -99,7 +99,7 @@ def test_batch_decode_waveforms_single_vs_multiple_decoder_shapes():
     packed_hs, input_lengths = decoder.call_args[0]
     assert packed_hs.shape == (4, 7)  # T from decode_vq mock
     assert input_lengths.tolist() == [4]
-    assert out1[0].shape == (4 * _FPT,)
+    assert out1[0].shape == (4 * _FTP,)
     assert out1[0].dtype == torch.float32
 
     decoder.reset_mock()
@@ -112,8 +112,8 @@ def test_batch_decode_waveforms_single_vs_multiple_decoder_shapes():
     assert packed_hs2.shape == (4 + 8, 7)  # 1 group -> T=4; 2 groups -> T=8
     assert input_lengths2.tolist() == [4, 8]
     assert len(out2) == 2
-    assert out2[0].shape == (4 * _FPT,)
-    assert out2[1].shape == (8 * _FPT,)
+    assert out2[0].shape == (4 * _FTP,)
+    assert out2[1].shape == (8 * _FTP,)
 
 
 def test_batch_decode_waveforms_mixed_valid_invalid_requests():
@@ -140,8 +140,8 @@ def test_batch_decode_waveforms_mixed_valid_invalid_requests():
     assert len(out) == len(inputs)
     for i in range(5):
         assert out[i].numel() == 0, f"index {i} should be empty"
-    assert out[5].shape == (4 * _FPT,)
-    assert out[6].shape == (4 * _FPT,)
+    assert out[5].shape == (4 * _FTP,)
+    assert out[6].shape == (4 * _FTP,)
     audio_tok.decoder.assert_called_once()
     packed_hs, input_lengths = audio_tok.decoder.call_args[0]
     assert packed_hs.shape[0] == 8
@@ -166,5 +166,5 @@ def test_batch_decode_waveforms_output_shape_trim_when_decoder_returns_extra_sam
     audio_tok.decoder.return_value = torch.ones(1, 1, 10_000, dtype=torch.float32)
     out = MiMoAudioToken2WavForConditionalGenerationVLLM._batch_decode_waveforms(model, [flat])
     assert out[0].dim() == 1
-    assert out[0].numel() == 4 * _FPT
+    assert out[0].numel() == 4 * _FTP
     assert out[0].dtype == torch.float32

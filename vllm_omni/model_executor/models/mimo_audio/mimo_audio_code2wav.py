@@ -26,7 +26,16 @@ from vllm_omni.model_executor.models.output_templates import OmniOutput
 logger = logging.getLogger(__name__)
 
 
-DUMMY_CODE_SHAPE = 36
+def flat_codec_group_element_count(group_size: int, audio_channels: int) -> int:
+    """Flat token count for one MiMo talker codec group on the code2wav wire.
+
+    The talker flattens a ``(group_size, audio_channels + 1)`` layout in column-major
+    order: one leading text/special column per row plus ``audio_channels`` RVQ code
+    columns. Each group therefore occupies ``group_size * (audio_channels + 1)``
+    consecutive ids. This matches ``group_width`` in :func:`extract_audio_code_tensor`
+    and is used to count how many such groups are present in a flat ``codes`` tensor.
+    """
+    return group_size * (audio_channels + 1)
 
 
 class MiMoAudioTokenizerWorker:
@@ -310,7 +319,7 @@ def extract_audio_code_tensor(
     if flat_codes.numel() == 0:
         return None
 
-    group_width = group_size * (audio_channels + 1)
+    group_width = flat_codec_group_element_count(group_size, audio_channels)
     usable = (flat_codes.numel() // group_width) * group_width
     if usable == 0:
         return None
@@ -493,9 +502,12 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
         wav_chunk = self._decode_waveform_from_codes(codes)
         if wav_chunk.numel() == 0:
             return wav_chunk
-        # Infer number of codec frames: flat format has 36 elements per frame (9*4 with prepend)
         num_flat = codes.numel() if codes.ndim == 1 else codes.shape[-1]
-        num_chunks = num_flat // 36
+        elt_per_group = flat_codec_group_element_count(
+            self.streamer_config.group_size,
+            self.streamer_config.audio_channels,
+        )
+        num_chunks = num_flat // elt_per_group
         if num_chunks <= chunk_size:
             context_size = 0
         else:
@@ -714,7 +726,8 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
             valid_indices.append(i)
 
             num_flat = req_codes.numel() if req_codes.ndim == 1 else req_codes.shape[-1]
-            num_chunks = num_flat // 36
+            elt_per_group = flat_codec_group_element_count(group_size, audio_channels)
+            num_chunks = num_flat // elt_per_group
             ctx = 0 if num_chunks <= chunk_size else left_context_size
             context_sizes.append(ctx)
 
@@ -760,7 +773,8 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
         return result
 
     def _check_dummy_code_tensor(self, code_tensor: torch.Tensor) -> bool:
-        if code_tensor is not None and code_tensor.numel() == DUMMY_CODE_SHAPE:
+        expected = flat_codec_group_element_count(self.config.group_size, self.config.audio_channels)
+        if code_tensor is not None and code_tensor.numel() == expected:
             code_groups = code_tensor.view(self.config.group_size, self.config.audio_channels + 1)
             return (
                 (code_groups[:, 0] == TALKER_CODEC_PAD_TOKEN_ID).all() and (code_groups[:, 1:].sum() == 0).all()
