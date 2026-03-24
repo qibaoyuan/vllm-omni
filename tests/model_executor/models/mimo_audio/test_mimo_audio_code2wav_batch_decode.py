@@ -93,7 +93,7 @@ def test_batch_decode_waveforms_single_vs_multiple_decoder_shapes():
 
     # Single valid request: decoder output rank-3 for double squeeze path
     flat = _make_valid_flat_codes(1)
-    decoder.return_value = torch.ones(1, 1, 5000, dtype=torch.float32)
+    decoder.return_value = torch.ones(1, 1, 4 * _FTP + 100, dtype=torch.float32)
     out1 = MiMoAudioToken2WavForConditionalGenerationVLLM._batch_decode_waveforms(model, [flat])
     decoder.assert_called_once()
     packed_hs, input_lengths = decoder.call_args[0]
@@ -105,7 +105,7 @@ def test_batch_decode_waveforms_single_vs_multiple_decoder_shapes():
     decoder.reset_mock()
     a = _make_valid_flat_codes(1)
     b = _make_valid_flat_codes(2)
-    decoder.return_value = torch.ones(2, 1, 5000, dtype=torch.float32)
+    decoder.return_value = torch.ones(2, 1, 8 * _FTP + 100, dtype=torch.float32)
     out2 = MiMoAudioToken2WavForConditionalGenerationVLLM._batch_decode_waveforms(model, [a, b])
     decoder.assert_called_once()
     packed_hs2, input_lengths2 = decoder.call_args[0]
