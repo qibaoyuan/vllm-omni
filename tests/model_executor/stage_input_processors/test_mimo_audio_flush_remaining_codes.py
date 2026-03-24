@@ -9,6 +9,8 @@ import torch
 
 from vllm_omni.model_executor.stage_input_processors.mimo_audio import _flush_remaining_codes
 
+pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
+
 
 def _sentinel():
     return {"code_predictor_codes": [], "finished": torch.tensor(True, dtype=torch.bool)}
@@ -64,7 +66,9 @@ def test_flush_remaining_codes_when_length_is_exact_multiple_of_chunk_size():
         (1, 5, 10, 1),  # chunk_length=1 -> min(1,11)=1
     ],
 )
-def test_flush_remaining_codes_context_window_end_index(length, chunk_size, left_context, expected_end_index):
+def test_flush_remaining_codes_context_window_end_index(
+    length: int, chunk_size: int, left_context: int, expected_end_index: int
+) -> None:
     """Mirror _flush_remaining_codes context_length and end_index rules."""
     accumulated = [[i] for i in range(length)]
     tm = SimpleNamespace(code_prompt_token_ids={"r": accumulated})

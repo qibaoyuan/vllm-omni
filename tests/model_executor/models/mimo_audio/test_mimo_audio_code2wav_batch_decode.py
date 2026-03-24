@@ -79,6 +79,7 @@ def _minimal_model():
 
 
 def test_batch_decode_waveforms_empty_input_list():
+    """Empty input list returns a single zero-length float32 tensor on model device."""
     model, _ = _minimal_model()
     out = MiMoAudioToken2WavForConditionalGenerationVLLM._batch_decode_waveforms(model, [])
     assert len(out) == 1
@@ -88,6 +89,7 @@ def test_batch_decode_waveforms_empty_input_list():
 
 
 def test_batch_decode_waveforms_single_vs_multiple_decoder_shapes():
+    """Single and multi-request batches produce correctly shaped packed hidden states and trimmed waveforms."""
     model, audio_tok = _minimal_model()
     decoder = audio_tok.decoder
 
@@ -117,6 +119,7 @@ def test_batch_decode_waveforms_single_vs_multiple_decoder_shapes():
 
 
 def test_batch_decode_waveforms_mixed_valid_invalid_requests():
+    """Mixed valid and invalid requests: invalid slots get empty tensors, valid slots get decoded waveforms."""
     model, audio_tok = _minimal_model()
     valid_a = _make_valid_flat_codes(1)
     valid_b = _make_valid_flat_codes(1)
@@ -149,6 +152,7 @@ def test_batch_decode_waveforms_mixed_valid_invalid_requests():
 
 
 def test_batch_decode_waveforms_all_invalid_returns_per_request_empty():
+    """All-invalid batch skips decoder entirely and returns empty tensors for every slot."""
     model, audio_tok = _minimal_model()
     out = MiMoAudioToken2WavForConditionalGenerationVLLM._batch_decode_waveforms(
         model,
@@ -160,6 +164,7 @@ def test_batch_decode_waveforms_all_invalid_returns_per_request_empty():
 
 
 def test_batch_decode_waveforms_output_shape_trim_when_decoder_returns_extra_samples():
+    """Decoder output longer than valid_len is trimmed to the exact expected waveform length."""
     model, audio_tok = _minimal_model()
     flat = _make_valid_flat_codes(1)
     # Longer than valid_len so branch wav = wav[:valid_len] runs
