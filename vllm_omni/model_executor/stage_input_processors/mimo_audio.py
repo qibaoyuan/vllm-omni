@@ -80,6 +80,28 @@ def _flush_remaining_codes(
     }
 
 
+def _is_codes_empty(codes: Any) -> bool:
+    """Check whether code_predictor_codes should be treated as empty / invalid."""
+    if codes is None:
+        return True
+    if isinstance(codes, torch.Tensor):
+        return codes.numel() == 0 or not codes.any()
+    if hasattr(codes, "__len__") and len(codes) == 0:
+        return True
+    t = torch.tensor(codes, dtype=torch.long) if not isinstance(codes, torch.Tensor) else codes
+    return not t.any()
+
+
+def _to_code_tensor(codes: Any) -> torch.Tensor | None:
+    """Convert codes to a (B, 1, 8, 4) long tensor, or return None if shape is invalid."""
+    code_tensor = codes.to(torch.long) if isinstance(codes, torch.Tensor) else torch.tensor(codes, dtype=torch.long)
+    if code_tensor.ndim == 3:
+        code_tensor = code_tensor.unsqueeze(0)
+    if code_tensor.ndim != 4 or code_tensor.shape[-2:] != (8, 4):
+        return None
+    return code_tensor
+
+
 def llm2code2wav_async_chunk(
     transfer_manager: Any,
     pooling_output: dict[str, Any],
@@ -101,62 +123,25 @@ def llm2code2wav_async_chunk(
 
     request_id = getattr(request, "external_req_id", None)
 
-    if "code_predictor_codes" not in pooling_output:
+    codes = pooling_output.get("code_predictor_codes")
+
+    if _is_codes_empty(codes):
         if is_finished:
             return _flush_remaining_codes(transfer_manager, request_id, chunk_size, left_context_size)
-
         return None
 
-    code_predictor_codes = pooling_output["code_predictor_codes"]
-
-    if code_predictor_codes is None:
+    code_tensor = _to_code_tensor(codes)
+    if code_tensor is None:
         if is_finished:
             return _flush_remaining_codes(transfer_manager, request_id, chunk_size, left_context_size)
-
-        return None
-    if isinstance(code_predictor_codes, torch.Tensor):
-        if code_predictor_codes.numel() == 0:
-            if is_finished:
-                return _flush_remaining_codes(transfer_manager, request_id, chunk_size, left_context_size)
-
-            return None
-    elif hasattr(code_predictor_codes, "__len__"):
-        if len(code_predictor_codes) == 0:
-            if is_finished:
-                return _flush_remaining_codes(transfer_manager, request_id, chunk_size, left_context_size)
-
-            return None
-
-    if isinstance(code_predictor_codes, torch.Tensor):
-        if not code_predictor_codes.any():
-            if is_finished:
-                return _flush_remaining_codes(transfer_manager, request_id, chunk_size, left_context_size)
-
-            return None
-        code_tensor = code_predictor_codes.to(torch.long)
-    else:
-        code_tensor = torch.tensor(code_predictor_codes, dtype=torch.long)
-        if not code_tensor.any():
-            if is_finished:
-                return _flush_remaining_codes(transfer_manager, request_id, chunk_size, left_context_size)
-
-            return None
-
-    if code_tensor.ndim == 3:
-        code_tensor = code_tensor.unsqueeze(0)
-    if code_tensor.ndim != 4 or code_tensor.shape[-2:] != (8, 4):
-        if is_finished:
-            return _flush_remaining_codes(transfer_manager, request_id, chunk_size, left_context_size)
-
         return None
 
     pad_vec = torch.tensor([TALKER_CODEC_PAD_TOKEN_ID] * 4, device=code_tensor.device, dtype=code_tensor.dtype)
-    code_final = prepend_and_flatten_colmajor(code_tensor, pad_vec)
-    code_list = code_final.tolist()
+    code_list = prepend_and_flatten_colmajor(code_tensor, pad_vec).tolist()
+
     if sum(code_list) == 0:
         if is_finished:
             return _flush_remaining_codes(transfer_manager, request_id, chunk_size, left_context_size)
-
         return None
 
     if request_id is None:
@@ -170,10 +155,10 @@ def llm2code2wav_async_chunk(
 
     context_length = chunk_length if chunk_length != 0 else chunk_size
     end_index = min(length, left_context_size + context_length)
-
     left_ctx_frames = max(0, min(length - context_length, left_context_size))
     flat_codes = torch.tensor(transfer_manager.code_prompt_token_ids[request_id][-end_index:]).reshape(-1).tolist()
-    info = {
+
+    return {
         "code_predictor_codes": flat_codes,
         "left_context_size": left_ctx_frames,
         "codec_chunk_frames": chunk_size,
@@ -181,8 +166,6 @@ def llm2code2wav_async_chunk(
         "code_flat_numel": len(flat_codes),
         "finished": torch.tensor(is_finished, dtype=torch.bool),
     }
-
-    return info
 
 
 def llm2code2wav(
