@@ -66,8 +66,16 @@ def _flush_remaining_codes(
     context_length = chunk_length if chunk_length != 0 else chunk_size
     end_index = min(length, left_context_size + context_length)
 
+    # Align with qwen3_omni talker2code2wav_async_chunk: decoder strip uses explicit frame count.
+    left_ctx_frames = max(0, min(length - context_length, left_context_size))
+    flat_codes = torch.tensor(accumulated[-end_index:]).reshape(-1).tolist()
+
     return {
-        "code_predictor_codes": (torch.tensor(accumulated[-end_index:]).reshape(-1).tolist()),
+        "code_predictor_codes": flat_codes,
+        "left_context_size": left_ctx_frames,
+        "codec_chunk_frames": chunk_size,
+        "codec_left_context_frames": left_context_size,
+        "code_flat_numel": len(flat_codes),
         "finished": torch.tensor(True, dtype=torch.bool),
     }
 
@@ -163,12 +171,17 @@ def llm2code2wav_async_chunk(
     context_length = chunk_length if chunk_length != 0 else chunk_size
     end_index = min(length, left_context_size + context_length)
 
+    left_ctx_frames = max(0, min(length - context_length, left_context_size))
+    flat_codes = torch.tensor(transfer_manager.code_prompt_token_ids[request_id][-end_index:]).reshape(-1).tolist()
     info = {
-        "code_predictor_codes": (
-            torch.tensor(transfer_manager.code_prompt_token_ids[request_id][-end_index:]).reshape(-1).tolist()
-        ),
+        "code_predictor_codes": flat_codes,
+        "left_context_size": left_ctx_frames,
+        "codec_chunk_frames": chunk_size,
+        "codec_left_context_frames": left_context_size,
+        "code_flat_numel": len(flat_codes),
         "finished": torch.tensor(is_finished, dtype=torch.bool),
     }
+
     return info
 
 

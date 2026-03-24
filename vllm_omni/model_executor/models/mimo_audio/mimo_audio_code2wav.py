@@ -4,6 +4,7 @@ import os
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Any
 
 import torch
 import torchaudio
@@ -11,7 +12,6 @@ from torch import nn
 from torchaudio.transforms import MelSpectrogram
 from transformers import AutoTokenizer, Qwen2Config
 from vllm.config import VllmConfig
-from vllm.forward_context import get_forward_context, is_forward_context_available
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
 from vllm.model_executor.models import SupportsPP
 from vllm.sequence import IntermediateTensors
@@ -389,6 +389,7 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
     """Decode MiMo audio codes to waveform for the code2wav stage."""
 
     have_multimodal_outputs = True
+    enable_update_additional_information = True
 
     def __init__(self, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
@@ -453,6 +454,8 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
             else None
         )
         self._codec_chunk_frames = int(extra_cfg.get("codec_chunk_frames", 3)) if isinstance(extra_cfg, dict) else 3
+        if self._codec_chunk_frames <= 0:
+            raise ValueError(f"codec_chunk_frames must be positive, got {self._codec_chunk_frames}")
         self._codec_left_context_frames = (
             int(extra_cfg.get("codec_left_context_frames", 3)) if isinstance(extra_cfg, dict) else 3
         )
@@ -466,26 +469,60 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
         # Decoder has no trainable weights to load in this stage.
         return set()
 
-    def _split_request_ids(
-        self,
+    @staticmethod
+    def _split_flat_codes_for_requests(
         ids: torch.Tensor,
-        seq_token_counts: list[int] | None = None,
+        seq_token_counts: list[int] | None,
+        runtime_additional_information: list[dict[str, Any]] | None,
     ) -> list[torch.Tensor]:
-        """Split concatenated input_ids into per-request segments."""
+        """Split flat codec token ids per request.
+
+        Prefer ``code_flat_numel`` from async-chunk / connector payload (same idea as
+        qwen3 omni/tts passing decode metadata in additional_information). Fall back
+        to runner-provided ``seq_token_counts`` (no forward_context / ubatch slicing).
+        """
+        n = ids.numel()
+        if n == 0:
+            return [ids]
+
+        if runtime_additional_information and all(
+            isinstance(info.get("code_flat_numel"), int) and int(info["code_flat_numel"]) > 0
+            for info in runtime_additional_information
+        ):
+            sizes = [int(info["code_flat_numel"]) for info in runtime_additional_information]
+            if sum(sizes) == n:
+                parts: list[torch.Tensor] = []
+                offset = 0
+                for sz in sizes:
+                    parts.append(ids[offset : offset + sz])
+                    offset += sz
+                return parts
+
         if seq_token_counts is not None and len(seq_token_counts) > 1:
             boundaries = [0]
             for count in seq_token_counts:
                 boundaries.append(boundaries[-1] + count)
-            n = ids.numel()
             return [ids[boundaries[i] : min(boundaries[i + 1], n)] for i in range(len(seq_token_counts))]
-        if is_forward_context_available():
-            slices = get_forward_context().ubatch_slices
-            if slices is not None and len(slices) > 1 and not any(hasattr(s, "token_slice") for s in slices):
-                boundaries = [0]
-                for s in slices:
-                    boundaries.append(boundaries[-1] + s)
-                return [ids[boundaries[i] : boundaries[i + 1]] for i in range(len(boundaries) - 1)]
+
         return [ids]
+
+    @staticmethod
+    def _mimo_codec_runtime_lists(
+        num_req: int,
+        runtime_additional_information: list[dict[str, Any]] | None,
+    ) -> tuple[list[int | None], list[int | None]]:
+        """Per-request ``left_context_size`` / ``codec_chunk_frames`` from runtime buffer."""
+        left_frames: list[int | None] = [None] * num_req
+        chunk_frames: list[int | None] = [None] * num_req
+        if not runtime_additional_information:
+            return left_frames, chunk_frames
+        for i in range(min(num_req, len(runtime_additional_information))):
+            info = runtime_additional_information[i]
+            if "left_context_size" in info:
+                left_frames[i] = int(info["left_context_size"])
+            if "codec_chunk_frames" in info:
+                chunk_frames[i] = int(info["codec_chunk_frames"])
+        return left_frames, chunk_frames
 
     def chunked_decode_streaming(
         self,
@@ -521,8 +558,13 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
         self,
         input_ids: torch.Tensor | None = None,
         codes: torch.Tensor | None = None,
+        runtime_additional_information: list[dict[str, Any]] | None = None,
         **kwargs,
     ) -> OmniOutput | torch.Tensor | IntermediateTensors:
+        if runtime_additional_information is None:
+            runtime_additional_information = kwargs.get("model_intermediate_buffer") or kwargs.get(
+                "runtime_additional_information"
+            )
         code_tensor = codes if codes is not None else input_ids
         empty = torch.zeros((0,), dtype=torch.float32, device=self.device)
 
@@ -534,7 +576,10 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
 
         is_async_chunk = getattr(self.vllm_config.model_config, "async_chunk", False)
         ids = code_tensor.reshape(-1).to(dtype=torch.long)
-        request_ids_list = self._split_request_ids(ids, kwargs.get("seq_token_counts"))
+        request_ids_list = self._split_flat_codes_for_requests(
+            ids, kwargs.get("seq_token_counts"), runtime_additional_information
+        )
+        per_left, per_chunk = self._mimo_codec_runtime_lists(len(request_ids_list), runtime_additional_information)
 
         is_capturing = torch.cuda.is_current_stream_capturing()
         if is_capturing:
@@ -546,8 +591,10 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
         if is_async_chunk:
             audios = self._batch_chunked_decode_streaming(
                 request_ids_list,
-                chunk_size=self._codec_chunk_frames,
-                left_context_size=self._codec_left_context_frames,
+                default_chunk_size=self._codec_chunk_frames,
+                default_left_context_size=self._codec_left_context_frames,
+                per_req_left_context_frames=per_left,
+                per_req_codec_chunk_frames=per_chunk,
             )
         else:
             audios = self._batch_decode_waveforms(request_ids_list)
@@ -686,8 +733,11 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
     def _batch_chunked_decode_streaming(
         self,
         request_codes_list: list[torch.Tensor],
-        chunk_size: int,
-        left_context_size: int,
+        default_chunk_size: int,
+        default_left_context_size: int,
+        *,
+        per_req_left_context_frames: list[int | None] | None = None,
+        per_req_codec_chunk_frames: list[int | None] | None = None,
     ) -> list[torch.Tensor]:
         """Batch version of chunked_decode_streaming for async_chunk mode."""
         empty = torch.zeros((0,), dtype=torch.float32, device=self.device)
@@ -728,7 +778,19 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
             num_flat = req_codes.numel() if req_codes.ndim == 1 else req_codes.shape[-1]
             elt_per_group = flat_codec_group_element_count(group_size, audio_channels)
             num_chunks = num_flat // elt_per_group
-            ctx = 0 if num_chunks <= chunk_size else left_context_size
+            chunk_sz = default_chunk_size
+            if per_req_codec_chunk_frames is not None and i < len(per_req_codec_chunk_frames):
+                c = per_req_codec_chunk_frames[i]
+                if c is not None:
+                    chunk_sz = c
+            if (
+                per_req_left_context_frames is not None
+                and i < len(per_req_left_context_frames)
+                and per_req_left_context_frames[i] is not None
+            ):
+                ctx = int(per_req_left_context_frames[i])
+            else:
+                ctx = 0 if num_chunks <= chunk_sz else default_left_context_size
             context_sizes.append(ctx)
 
         if not hidden_list:

@@ -168,3 +168,55 @@ def test_batch_decode_waveforms_output_shape_trim_when_decoder_returns_extra_sam
     assert out[0].dim() == 1
     assert out[0].numel() == 4 * _FTP
     assert out[0].dtype == torch.float32
+
+
+def test_batch_decode_waveforms_multi_request_trims_each_row_when_decoder_returns_extra():
+    """Else-branch split: per-request wav[:valid_len] when decoder pads each batch row."""
+    model, audio_tok = _minimal_model()
+    a = _make_valid_flat_codes(1)
+    b = _make_valid_flat_codes(2)
+    audio_tok.decoder.return_value = torch.ones(2, 1, 10_000, dtype=torch.float32)
+    out = MiMoAudioToken2WavForConditionalGenerationVLLM._batch_decode_waveforms(model, [a, b])
+    assert len(out) == 2
+    assert out[0].shape == (4 * _FTP,)
+    assert out[1].shape == (8 * _FTP,)
+    assert out[0].dtype == torch.float32
+    assert out[1].dtype == torch.float32
+
+
+def test_batch_decode_waveforms_valid_only_at_edges_maps_to_correct_indices():
+    """Tensor packing order must match valid_indices when invalid requests are in the middle."""
+    model, audio_tok = _minimal_model()
+    first = _make_valid_flat_codes(1)
+    last = _make_valid_flat_codes(2)
+    inputs = [
+        first,
+        None,
+        _make_dummy_code_tensor(),
+        last,
+    ]
+    audio_tok.decoder.return_value = torch.ones(2, 1, 10_000, dtype=torch.float32)
+    out = MiMoAudioToken2WavForConditionalGenerationVLLM._batch_decode_waveforms(model, inputs)
+    assert len(out) == 4
+    assert out[0].numel() == 4 * _FTP
+    assert out[1].numel() == 0
+    assert out[2].numel() == 0
+    assert out[3].numel() == 8 * _FTP
+    packed_hs, input_lengths = audio_tok.decoder.call_args[0]
+    assert packed_hs.shape[0] == 12
+    assert input_lengths.tolist() == [4, 8]
+
+
+def test_batch_decode_waveforms_output_shapes_1d_float32_for_all_slots():
+    """Every slot is a 1-D float32 vector (empty or waveform), matching downstream expectations."""
+    model, audio_tok = _minimal_model()
+    inputs = [_make_valid_flat_codes(1), None, _make_valid_flat_codes(1)]
+    audio_tok.decoder.return_value = torch.ones(2, 1, 5000, dtype=torch.float32)
+    out = MiMoAudioToken2WavForConditionalGenerationVLLM._batch_decode_waveforms(model, inputs)
+    assert len(out) == 3
+    for i, t in enumerate(out):
+        assert t.dim() == 1, f"slot {i}"
+        assert t.dtype == torch.float32, f"slot {i}"
+    assert out[0].numel() == 4 * _FTP
+    assert out[1].numel() == 0
+    assert out[2].numel() == 4 * _FTP
