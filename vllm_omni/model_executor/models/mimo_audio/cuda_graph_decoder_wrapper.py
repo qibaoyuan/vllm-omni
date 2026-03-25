@@ -117,15 +117,15 @@ class CUDAGraphMiMoDecoderWrapper:
         for size in self.capture_sizes:
             voc_len = self._compute_vocoder_seq_len(size)
             mask = TransformerVocos.build_vocoder_attn_mask(
-                voc_len, voc_len,
+                voc_len,
+                voc_len,
                 tuple(self.tokenizer.config.vocoder_attn_window_size),
-                device, model_dtype,
+                device,
+                model_dtype,
             )
             self.static_vocoder_masks[size] = mask
 
-            dummy = torch.zeros(
-                self.audio_channels, size, dtype=torch.long, device=device
-            )
+            dummy = torch.zeros(self.audio_channels, size, dtype=torch.long, device=device)
             with torch.no_grad():
                 _ = self.tokenizer.decode_fixed(dummy, size, vocoder_attn_mask=mask)
 
@@ -150,9 +150,7 @@ class CUDAGraphMiMoDecoderWrapper:
         )
 
     def _capture(self, size: int, device: torch.device):
-        static_codes = torch.zeros(
-            self.audio_channels, size, dtype=torch.long, device=device
-        )
+        static_codes = torch.zeros(self.audio_channels, size, dtype=torch.long, device=device)
         mask = self.static_vocoder_masks[size]
 
         with torch.no_grad():
@@ -163,23 +161,27 @@ class CUDAGraphMiMoDecoderWrapper:
         with torch.no_grad():
             with torch.cuda.graph(graph):
                 static_output = self.tokenizer.decode_fixed(
-                    static_codes, size, vocoder_attn_mask=mask,
+                    static_codes,
+                    size,
+                    vocoder_attn_mask=mask,
                 )
 
         self.graphs[size] = graph
         self.static_code_inputs[size] = static_codes
         self.static_wav_outputs[size] = static_output
 
-    def _update_vocoder_mask(self, padded_size: int, actual_T: int):
+    def _update_vocoder_mask(self, padded_size: int, actual_code_shape: int):
         """Update the static vocoder mask in-place for the given actual code length."""
         mask = self.static_vocoder_masks[padded_size]
         voc_padded = self._compute_vocoder_seq_len(padded_size)
-        voc_actual = self._compute_vocoder_seq_len(actual_T)
+        voc_actual = self._compute_vocoder_seq_len(actual_code_shape)
 
         new_mask = TransformerVocos.build_vocoder_attn_mask(
-            voc_padded, voc_actual,
+            voc_padded,
+            voc_actual,
             tuple(self.tokenizer.config.vocoder_attn_window_size),
-            mask.device, mask.dtype,
+            mask.device,
+            mask.dtype,
         )
         mask.copy_(new_mask)
 
@@ -194,20 +196,20 @@ class CUDAGraphMiMoDecoderWrapper:
         if not self.enabled or not self._warmed_up:
             return self.tokenizer.decode(codes)
 
-        actual_T = codes.shape[-1]
-        padded_size = self._get_padded_size(actual_T)
+        actual_code_shape = codes.shape[-1]
+        padded_size = self._get_padded_size(actual_code_shape)
 
         if padded_size is None or padded_size not in self.graphs:
             return self.tokenizer.decode(codes)
 
         self.static_code_inputs[padded_size].zero_()
-        self.static_code_inputs[padded_size][:, :actual_T] = codes
+        self.static_code_inputs[padded_size][:, :actual_code_shape] = codes
 
-        self._update_vocoder_mask(padded_size, actual_T)
+        self._update_vocoder_mask(padded_size, actual_code_shape)
 
         self.graphs[padded_size].replay()
 
-        actual_wav_len = self._compute_output_wav_len(actual_T)
+        actual_wav_len = self._compute_output_wav_len(actual_code_shape)
         output = self.static_wav_outputs[padded_size]
         return output[..., :actual_wav_len].clone()
 
@@ -247,11 +249,12 @@ class CUDAGraphMiMoDecoderWrapper:
         start_idx = 0
 
         for i, length in enumerate(chunk_input_lengths):
-            sample_hs = hidden_states[start_idx: start_idx + length]
+            sample_hs = hidden_states[start_idx : start_idx + length]
             start_idx += length
             if history_cache.hidden_states is not None:
                 sample_hs = torch.cat(
-                    [history_cache.hidden_states[i], sample_hs], dim=0,
+                    [history_cache.hidden_states[i], sample_hs],
+                    dim=0,
                 )
                 length += history_cache.hidden_states[i].size(0)
             input_hidden_states.append(sample_hs)
@@ -266,27 +269,21 @@ class CUDAGraphMiMoDecoderWrapper:
 
         for i, wav in enumerate(output):
             wav = wav.float().detach().cpu()
-            prev_processed = (
-                history_cache.processed_lengths[i]
-                if history_cache.processed_lengths is not None
-                else 0
-            )
+            prev_processed = history_cache.processed_lengths[i] if history_cache.processed_lengths is not None else 0
 
             if last_chunk:
-                return_wavs.append(wav[:, prev_processed * frames_per_token:])
+                return_wavs.append(wav[:, prev_processed * frames_per_token :])
                 new_processed_length = input_lengths[i]
             elif input_lengths[i] <= streaming_config.right_overlap:
                 return_wavs.append(None)
                 new_processed_length = 0
             else:
                 end_idx = input_lengths[i] - streaming_config.right_overlap
-                wav = wav[:, prev_processed * frames_per_token: end_idx * frames_per_token]
+                wav = wav[:, prev_processed * frames_per_token : end_idx * frames_per_token]
                 return_wavs.append(wav)
                 new_processed_length = end_idx
                 if input_lengths[i] > streaming_config.left_overlap:
-                    cache_hidden_states[i] = cache_hidden_states[i][
-                        -streaming_config.left_overlap:
-                    ]
+                    cache_hidden_states[i] = cache_hidden_states[i][-streaming_config.left_overlap :]
                     new_processed_length -= input_lengths[i] - streaming_config.left_overlap
 
             processed_lengths.append(new_processed_length)
@@ -311,37 +308,41 @@ class CUDAGraphMiMoDecoderWrapper:
         decoder = self.tokenizer.decoder
         cfg = self.tokenizer.config
         window_size = tuple(cfg.vocoder_attn_window_size)
-        
+
         # SDPA 要求 attn_mask 与 query 同 dtype；padded_hs 来自 decode_vq 常为 float32，
         # forward_fixed 内会 cast 到 vocoder 权重 dtype（如 bfloat16），mask 须对齐。
         mask_dtype = decoder.vocoder.embeddings.weight.dtype
-        
 
-        for sample_hs, actual_T in zip(hidden_states_list, input_lengths):
-            padded_size = self._get_padded_size(actual_T)
+        for sample_hs, actual_code_shape in zip(hidden_states_list, input_lengths):
+            padded_size = self._get_padded_size(actual_code_shape)
 
             if padded_size is None:
                 wav = decoder(
                     sample_hs,
-                    torch.tensor([actual_T], device=sample_hs.device),
+                    torch.tensor([actual_code_shape], device=sample_hs.device),
                 )
                 results.append(wav.squeeze(0))
                 continue
 
-            if actual_T < padded_size:
+            if actual_code_shape < padded_size:
                 pad = torch.zeros(
-                    padded_size - actual_T, sample_hs.size(-1),
-                    device=sample_hs.device, dtype=sample_hs.dtype,
+                    padded_size - actual_code_shape,
+                    sample_hs.size(-1),
+                    device=sample_hs.device,
+                    dtype=sample_hs.dtype,
                 )
                 padded_hs = torch.cat([sample_hs, pad], dim=0)
             else:
                 padded_hs = sample_hs
 
             voc_padded = self._compute_vocoder_seq_len(padded_size)
-            voc_actual = self._compute_vocoder_seq_len(actual_T)
+            voc_actual = self._compute_vocoder_seq_len(actual_code_shape)
             vocoder_mask = TransformerVocos.build_vocoder_attn_mask(
-                voc_padded, voc_actual, window_size,
-                padded_hs.device, mask_dtype,
+                voc_padded,
+                voc_actual,
+                window_size,
+                padded_hs.device,
+                mask_dtype,
             )
 
             wav = decoder.forward_fixed(
@@ -349,7 +350,7 @@ class CUDAGraphMiMoDecoderWrapper:
                 vocoder_attn_mask=vocoder_mask,
             )
 
-            actual_wav_len = self._compute_output_wav_len(actual_T)
+            actual_wav_len = self._compute_output_wav_len(actual_code_shape)
             wav = wav[..., :actual_wav_len].squeeze(0)
             results.append(wav)
 
@@ -358,6 +359,3 @@ class CUDAGraphMiMoDecoderWrapper:
     @property
     def is_ready(self) -> bool:
         return self.enabled and self._warmed_up and len(self.graphs) > 0
-
-
-
