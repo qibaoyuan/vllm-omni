@@ -309,8 +309,6 @@ class CUDAGraphMiMoDecoderWrapper:
         cfg = self.tokenizer.config
         window_size = tuple(cfg.vocoder_attn_window_size)
 
-        # SDPA 要求 attn_mask 与 query 同 dtype；padded_hs 来自 decode_vq 常为 float32，
-        # forward_fixed 内会 cast 到 vocoder 权重 dtype（如 bfloat16），mask 须对齐。
         mask_dtype = decoder.vocoder.embeddings.weight.dtype
 
         for sample_hs, actual_code_shape in zip(hidden_states_list, input_lengths):

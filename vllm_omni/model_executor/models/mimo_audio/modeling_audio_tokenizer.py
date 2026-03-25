@@ -487,8 +487,6 @@ class TransformerLayer(nn.Module):
         hidden_states = self.fc2(hidden_states)
         hidden_states = residual + hidden_states
 
-        # 无条件 clamp 替代 isinf/isnan 检查 —— .any() 会触发 CPU 同步，
-        # 在 CUDA Graph capture 期间不允许。无条件 clamp 对正常值无影响。
         if hidden_states.dtype == torch.float16 or hidden_states.dtype == torch.bfloat16:
             clamp_value = torch.finfo(hidden_states.dtype).max - 1000
             hidden_states = torch.clamp(hidden_states, min=-clamp_value, max=clamp_value)
