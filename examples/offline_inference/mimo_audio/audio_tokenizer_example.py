@@ -188,12 +188,12 @@ def streaming_decode_codes(
 """
 export CODE_DIR="/mnt/user/qibaoyuan/vllm-omni-qby/"
 export MODEL_DIR="/mnt/user/qibaoyuan"
-export CUDA_LAUNCH_BLOCKING=1
+export CUDA_LAUNCH_BLOCKING=0
 export MIMO_AUDIO_TOKENIZER_PATH="/mnt/user/qibaoyuan/MiMo-Audio-Tokenizer"
 
 cd /mnt/user/qibaoyuan/vllm-omni-qby/examples/offline_inference/mimo_audio/
 python3 -u audio_tokenizer_example.py  --tokenizer-path ${MIMO_AUDIO_TOKENIZER_PATH} \
---audio-path /mnt/user/qibaoyuan/vllm-omni-qby/examples/offline_inference/mimo_audio/自然对话_闺蜜闲聊_剪.wav
+--audio-path /mnt/user/qibaoyuan/vllm-omni-qby/examples/offline_inference/mimo_audio/beijing.mp3
 
 """
 
