@@ -137,7 +137,15 @@ class MiMoAudioTokenizerWorker:
                 try:
                     logger.info("[tokenizer worker] Initializing CUDA Graph decoder wrapper...")
                     cg_start = time.monotonic()
-                    self.cuda_graph_wrapper = CUDAGraphMiMoDecoderWrapper(self.audio_tokenizer, enabled=True)
+
+                    n_q = self.audio_tokenizer.config.num_quantizers
+                    cg_code_rows = sorted({self.audio_channels, n_q})
+                    self.cuda_graph_wrapper = CUDAGraphMiMoDecoderWrapper(
+                        self.audio_tokenizer,
+                        enabled=True,
+                        code_rows=cg_code_rows,
+                    )
+
                     self.cuda_graph_wrapper.warmup(torch.device(device_str))
                     logger.info(
                         "[tokenizer worker] CUDA Graph decoder ready in %.2fs",

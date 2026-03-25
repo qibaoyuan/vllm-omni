@@ -30,6 +30,9 @@ class CUDAGraphMiMoDecoderWrapper:
         wrapper = CUDAGraphMiMoDecoderWrapper(tokenizer)
         wrapper.warmup(device)
         wav = wrapper.decode(codes)  # auto graph-replay or eager fallback
+
+    When ``code_rows`` lists multiple RVQ depths (e.g. talker emits 8 rows but
+    config.num_quantizers is 20), one CUDA Graph is captured per (depth, bucket).
     """
 
     DEFAULT_CAPTURE_SIZES = [4, 6, 8, 12, 16, 24, 32, 64, 128, 256]
@@ -39,16 +42,33 @@ class CUDAGraphMiMoDecoderWrapper:
         tokenizer,
         capture_sizes: list[int] | None = None,
         enabled: bool = True,
+        code_rows: list[int] | None = None,
     ):
         self.tokenizer = tokenizer
+
+        # num_quantizers = RVQ layers in checkpoint; talker may emit fewer rows
         self.audio_channels = tokenizer.config.num_quantizers
+        nq = self.audio_channels
+        if code_rows is None:
+            rows = {nq}
+        else:
+            rows = {r for r in code_rows if 1 <= r <= nq}
+            rows.add(nq)
+        self._capture_code_rows: list[int] = sorted(rows)
+        if len(self._capture_code_rows) > 1:
+            logger.info(
+                "CUDAGraphMiMoDecoderWrapper: capturing graphs for code depths %s (num_quantizers=%d)",
+                self._capture_code_rows,
+                nq,
+            )
+
         self._explicit_sizes = capture_sizes is not None
         self.capture_sizes: list[int] = sorted(capture_sizes) if capture_sizes else []
         self.enabled = enabled
 
-        self.graphs: dict[int, CUDAGraph] = {}
-        self.static_code_inputs: dict[int, torch.Tensor] = {}
-        self.static_wav_outputs: dict[int, torch.Tensor] = {}
+        self.graphs: dict[tuple[int, int], CUDAGraph] = {}
+        self.static_code_inputs: dict[tuple[int, int], torch.Tensor] = {}
+        self.static_wav_outputs: dict[tuple[int, int], torch.Tensor] = {}
         self.static_vocoder_masks: dict[int, torch.Tensor] = {}
 
         self._warmed_up = False
@@ -125,32 +145,41 @@ class CUDAGraphMiMoDecoderWrapper:
             )
             self.static_vocoder_masks[size] = mask
 
-            dummy = torch.zeros(self.audio_channels, size, dtype=torch.long, device=device)
-            with torch.no_grad():
-                _ = self.tokenizer.decode_fixed(dummy, size, vocoder_attn_mask=mask)
+            for n_rows in self._capture_code_rows:
+                dummy = torch.zeros(n_rows, size, dtype=torch.long, device=device)
+                with torch.no_grad():
+                    _ = self.tokenizer.decode_fixed(dummy, size, vocoder_attn_mask=mask)
 
         torch.cuda.synchronize(device)
 
-        for size in self.capture_sizes:
-            try:
-                self._capture(size, device)
-                logger.info("  Captured CUDA Graph for code_len=%d", size)
-            except Exception:
-                logger.warning(
-                    "  Failed to capture graph for code_len=%d",
-                    size,
-                    exc_info=True,
-                )
+        expected = len(self.capture_sizes) * len(self._capture_code_rows)
+        for n_rows in self._capture_code_rows:
+            for size in self.capture_sizes:
+                try:
+                    self._capture(size, device, n_code_rows=n_rows)
+                    logger.info(
+                        "  Captured CUDA Graph for code_rows=%d code_len=%d",
+                        n_rows,
+                        size,
+                    )
+                except Exception:
+                    logger.warning(
+                        "  Failed to capture graph for code_rows=%d code_len=%d",
+                        n_rows,
+                        size,
+                        exc_info=True,
+                    )
 
         self._warmed_up = True
         logger.info(
             "CUDAGraphMiMoDecoderWrapper warmup complete: %d/%d captured",
             len(self.graphs),
-            len(self.capture_sizes),
+            expected,
         )
 
-    def _capture(self, size: int, device: torch.device):
-        static_codes = torch.zeros(self.audio_channels, size, dtype=torch.long, device=device)
+    def _capture(self, size: int, device: torch.device, n_code_rows: int):
+        key = (n_code_rows, size)
+        static_codes = torch.zeros(n_code_rows, size, dtype=torch.long, device=device)
         mask = self.static_vocoder_masks[size]
 
         with torch.no_grad():
@@ -166,9 +195,9 @@ class CUDAGraphMiMoDecoderWrapper:
                     vocoder_attn_mask=mask,
                 )
 
-        self.graphs[size] = graph
-        self.static_code_inputs[size] = static_codes
-        self.static_wav_outputs[size] = static_output
+        self.graphs[key] = graph
+        self.static_code_inputs[key] = static_codes
+        self.static_wav_outputs[key] = static_output
 
     def _update_vocoder_mask(self, padded_size: int, actual_code_shape: int):
         """Update the static vocoder mask in-place for the given actual code length."""
@@ -189,7 +218,7 @@ class CUDAGraphMiMoDecoderWrapper:
         """Decode codes with CUDA Graph replay when possible.
 
         Args:
-            codes: [audio_channels, T] on CUDA device.
+            codes: [n_rvq_rows, T] on CUDA device (n_rvq_rows may be < num_quantizers).
         Returns:
             Waveform tensor (same shape as MiMoAudioTokenizer.decode output).
         """
@@ -197,20 +226,24 @@ class CUDAGraphMiMoDecoderWrapper:
             return self.tokenizer.decode(codes)
 
         actual_code_shape = codes.shape[-1]
+        n_rows = codes.shape[0]
         padded_size = self._get_padded_size(actual_code_shape)
-
-        if padded_size is None or padded_size not in self.graphs:
+        if padded_size is None:
             return self.tokenizer.decode(codes)
 
-        self.static_code_inputs[padded_size].zero_()
-        self.static_code_inputs[padded_size][:, :actual_code_shape] = codes
+        key = (n_rows, padded_size)
+        if key not in self.graphs:
+            return self.tokenizer.decode(codes)
+
+        self.static_code_inputs[key].zero_()
+        self.static_code_inputs[key][:, :actual_code_shape] = codes
 
         self._update_vocoder_mask(padded_size, actual_code_shape)
 
-        self.graphs[padded_size].replay()
+        self.graphs[key].replay()
 
         actual_wav_len = self._compute_output_wav_len(actual_code_shape)
-        output = self.static_wav_outputs[padded_size]
+        output = self.static_wav_outputs[key]
         return output[..., :actual_wav_len].clone()
 
     @torch.no_grad()
