@@ -1,6 +1,5 @@
 # Copyright 2025 Xiaomi Corporation.
 import math
-import os
 from dataclasses import dataclass, field
 
 import torch
@@ -24,33 +23,8 @@ except Exception:
     logger.warning("flash_attn not installed")
 
 
-def _attn_implementation_from_env() -> str:
-    impl = os.environ.get("MIMO_AUDIO_ATTN_IMPLEMENTATION", "auto").strip().lower()
-    if impl not in ("auto", "flash", "sdpa", "eager"):
-        logger.warning("Unknown MIMO_AUDIO_ATTN_IMPLEMENTATION=%r; using auto", impl)
-        impl = "auto"
-    return impl
-
-
 def _should_use_flash_attn(hidden_states: torch.Tensor) -> bool:
-    impl = _attn_implementation_from_env()
-    if impl in ("sdpa", "eager"):
-        return False
-    if impl == "flash":
-        if not is_flash_atth_available:
-            raise RuntimeError(
-                "MIMO_AUDIO_ATTN_IMPLEMENTATION=flash but flash_attn is not installed. "
-                "Install flash-attn or switch to 'sdpa'/'eager'/'auto'."
-            )
-        if not hidden_states.is_cuda:
-            raise RuntimeError("MIMO_AUDIO_ATTN_IMPLEMENTATION=flash requires a CUDA device.")
-        return True
-    # auto
     return hidden_states.is_cuda and is_flash_atth_available
-
-
-def _should_use_eager_attn() -> bool:
-    return _attn_implementation_from_env() == "eager"
 
 
 def _build_varlen_attn_mask(
@@ -418,7 +392,7 @@ class Attention(nn.Module):
             )
             attn_output = attn_output.reshape(total_seq_len, self.embed_dim)
 
-        elif not _should_use_eager_attn():
+        else:
             attn_output = _attention_forward_sdpa(
                 query_states,
                 key_states,
@@ -429,34 +403,6 @@ class Attention(nn.Module):
                 self.causal,
                 self.window_size,
             )
-        else:
-            # === Fallback: eager matmul (MIMO_AUDIO_ATTN_IMPLEMENTATION=eager); ===
-            cu_len = F.pad(torch.cumsum(seq_len, dim=0), (1, 0), "constant", 0).to(torch.long)
-            attn_output = torch.zeros_like(hidden_states)
-
-            for i, slen in enumerate(seq_len.tolist()):
-                if slen == 0:
-                    continue
-                start_idx = cu_len[i].item()
-                end_idx = cu_len[i + 1].item()
-
-                q = query_states[start_idx:end_idx]  # [slen, num_heads, head_dim]
-                k = key_states[start_idx:end_idx]
-                v = value_states[start_idx:end_idx]
-
-                q = q.transpose(0, 1)  # [num_heads, slen, head_dim]
-                k = k.transpose(0, 1)
-                v = v.transpose(0, 1)
-
-                attn_scores = torch.matmul(q, k.transpose(-1, -2)) / (self.head_dim**0.5)
-                attn_mask = _build_varlen_attn_mask(slen, self.window_size, self.causal, q.device, attn_scores.dtype)
-                if attn_mask is not None:
-                    attn_scores = attn_scores + attn_mask.unsqueeze(0)
-                attn_probs = F.softmax(attn_scores, dim=-1)
-                attn_out = torch.matmul(attn_probs, v)  # [num_heads, slen, head_dim]
-
-                attn_out = attn_out.transpose(0, 1).reshape(slen, self.embed_dim)
-                attn_output[start_idx:end_idx] = attn_out
 
         attn_output = self.out_proj(attn_output)
         return attn_output
