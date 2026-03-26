@@ -263,7 +263,11 @@ def main():
     # records kernels for float32 weight addresses, and replay after
     # .to(bfloat16) will read wrong values.
     if device != "cpu":
-        tokenizer.to(dtype=torch.bfloat16)
+        if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+            compute_dtype = torch.bfloat16
+        else:
+            compute_dtype = torch.float16
+        tokenizer.to(dtype=compute_dtype)
 
     # _cudagraph_wrapper = CUDAGraphMiMoDecoderWrapper(
     #     tokenizer=tokenizer,
