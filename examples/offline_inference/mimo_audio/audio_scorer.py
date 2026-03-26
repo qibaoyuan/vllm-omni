@@ -1,6 +1,16 @@
+import argparse
+from pathlib import Path
+
 import librosa
 import numpy as np
 from pystoi import stoi
+
+_DEFAULT_WEIGHTS = {
+    "mse": 0.05,
+    "snr": 0.1,
+    "mel": 0.5,
+    "stoi": 0.35,
+}
 
 
 # ---------- Basic metrics ----------
@@ -9,8 +19,14 @@ def compute_mse(x, y):
 
 
 def compute_snr(x, y):
-    noise = x - y
-    return 10 * np.log10(np.sum(x**2) / (np.sum(noise**2) + 1e-8))
+    """SNR of reference x relative to the error signal (x - y).
+    Returns -80 dB when x is silent to avoid division by zero.
+    """
+    signal_power = np.sum(x**2)
+    noise_power = np.sum((x - y) ** 2)
+    if signal_power == 0:
+        return -80.0
+    return 10 * np.log10(signal_power / (noise_power + 1e-8))
 
 
 # ---------- Mel spectrogram difference ----------
@@ -39,62 +55,47 @@ def evaluate(ref, test, sr):
     }
 
 
+# ---------- Quality judgement ----------
+def judge_quality(metrics):
+    if metrics["stoi"] < 0.9:
+        return "Unacceptable (speech distortion)"
+
+    if metrics["mel"] > 1.0:
+        return "Noticeable spectral distortion"
+
+    if metrics["snr"] < 5:
+        return "Possibly misaligned or high noise"
+
+    return "Acceptable (good quality)"
+
+
 # ---------- Composite scoring ----------
 def score(metrics, w):
-    # quality = judge_quality(metrics)
-    # print(quality)
     return (
-        -w["mse"] * metrics["mse"]
-        + w["snr"] * metrics["snr"]
-        + -w["mel"] * metrics["mel"]
-        + w["stoi"] * metrics["stoi"]
+        -w["mse"] * metrics["mse"] + w["snr"] * metrics["snr"] - w["mel"] * metrics["mel"] + w["stoi"] * metrics["stoi"]
     )
 
 
 # ---------- Main workflow ----------
-def compare_audio(ref_path, paths):
+def compare_audio(ref_path, paths, w=None):
+    if w is None:
+        w = _DEFAULT_WEIGHTS
+
     ref, sr = librosa.load(ref_path, sr=None)
 
     results = {}
     for name, path in paths.items():
         y, _ = librosa.load(path, sr=sr)
 
-        # Align lengths
+        # Trim both signals to the shorter length before comparing
         min_len = min(len(ref), len(y))
-        ref_cut = ref[:min_len]
-        y_cut = y[:min_len]
-
-        metrics = evaluate(ref_cut, y_cut, sr)
+        metrics = evaluate(ref[:min_len], y[:min_len], sr)
         results[name] = metrics
 
-    # Weights
-    w = {
-        "mse": 0.05,
-        "snr": 0.1,
-        "mel": 0.5,
-        "stoi": 0.35,
-    }
-
-    # Compute scores
     scores = {k: score(v, w) for k, v in results.items()}
-
-    # Ranking
     ranking = sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
     return results, scores, ranking
-
-
-def judge_quality(metrics):
-    if metrics["stoi"] < 0.9:
-        return "❌ Unacceptable (speech distortion)"
-
-    if metrics["mel"] > 1.0:
-        return "⚠️ Noticeable spectral distortion"
-
-    if metrics["snr"] < 5:
-        return "⚠️ Possibly misaligned or high noise"
-
-    return "✅ Acceptable (good quality)"
 
 
 # ---------- Example ----------
@@ -109,22 +110,25 @@ auto {'mse': np.float32(0.010014627), 'snr': np.float32(-3.1738937), 'mel': np.f
 [('sdpa', np.float64(-0.18329784160760149)), ('flash', np.float64(-0.19276504530606714)), ('auto', np.float64(-0.19276504530606714)), ('eager', np.float64(-0.21487428742497816))]
 """
 if __name__ == "__main__":
-    ref_path = (
-        "/Users/qibaoyuan/PycharmProjects/vllm-omni-qby/examples/offline_inference/mimo_audio/freetalk_朋友_剪.wav"
+    parser = argparse.ArgumentParser(description="Compare audio files against a reference.")
+    parser.add_argument("--ref", required=True, help="Path to reference wav file")
+    parser.add_argument("--base-dir", default=".", help="Base directory for reconstructed wav files")
+    parser.add_argument(
+        "--names",
+        nargs="+",
+        default=["sdpa", "flash", "eager", "auto"],
+        help="Names of audio variants (expects reconstructed_<name>.wav in base-dir)",
     )
-    c_b_p = "/Users/qibaoyuan/PycharmProjects/vllm-omni-qby/"
-    paths = {
-        "sdpa": c_b_p + "reconstructed_sdpa.wav",
-        "flash": c_b_p + "reconstructed_flash.wav",
-        "eager": c_b_p + "reconstructed_eager.wav",
-        "auto": c_b_p + "reconstructed_auto.wav",
-    }
+    args = parser.parse_args()
 
-    results, scores, ranking = compare_audio(ref_path, paths)
+    base = Path(args.base_dir)
+    audio_paths = {name: str(base / f"reconstructed_{name}.wav") for name in args.names}
+
+    all_results, all_scores, all_ranking = compare_audio(args.ref, audio_paths)
 
     print("=== Metrics ===")
-    for k, v in results.items():
-        print(k, v)
+    for name, metrics in all_results.items():
+        print(f"{name}: {metrics} | quality: {judge_quality(metrics)}")
 
     print("\n=== Ranking ===")
-    print(ranking)
+    print(all_ranking)
