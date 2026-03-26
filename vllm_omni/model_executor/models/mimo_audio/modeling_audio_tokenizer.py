@@ -37,7 +37,14 @@ def _should_use_flash_attn(hidden_states: torch.Tensor) -> bool:
     if impl in ("sdpa", "eager"):
         return False
     if impl == "flash":
-        return hidden_states.is_cuda and is_flash_atth_available
+        if not is_flash_atth_available:
+            raise RuntimeError(
+                "MIMO_AUDIO_ATTN_IMPLEMENTATION=flash but flash_attn is not installed. "
+                "Install flash-attn or switch to 'sdpa'/'eager'/'auto'."
+            )
+        if not hidden_states.is_cuda:
+            raise RuntimeError("MIMO_AUDIO_ATTN_IMPLEMENTATION=flash requires a CUDA device.")
+        return True
     # auto
     return hidden_states.is_cuda and is_flash_atth_available
 
