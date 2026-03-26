@@ -63,7 +63,7 @@ def judge_quality(metrics):
     if metrics["mel"] > 1.0:
         return "Noticeable spectral distortion"
 
-    if metrics["snr"] < 5:
+    if metrics["snr"] < -10:
         return "Possibly misaligned or high noise"
 
     return "Acceptable (good quality)"
@@ -101,18 +101,26 @@ def compare_audio(ref_path, paths, w=None):
 # ---------- Example ----------
 """
 === Metrics ===
-sdpa {'mse': np.float32(0.0098172), 'snr': np.float32(-3.087422), 'mel': np.float32(0.4258594), 'stoi': np.float64(0.9681855813120915)}
-flash {'mse': np.float32(0.010014627), 'snr': np.float32(-3.1738937), 'mel': np.float32(0.42801365), 'stoi': np.float64(0.9689482957380713)}
-eager {'mse': np.float32(0.010577169), 'snr': np.float32(-3.4112406), 'mel': np.float32(0.42479107), 'stoi': np.float64(0.9690691176525283)}
-auto {'mse': np.float32(0.010014627), 'snr': np.float32(-3.1738937), 'mel': np.float32(0.42801365), 'stoi': np.float64(0.9689482957380713)}
+sdpa: {'mse': np.float32(0.0098172), 'snr': np.float32(-3.087422), 'mel': np.float32(0.4258594), 'stoi': np.float64(0.9681855813120915)} | quality: Acceptable (good quality)
+flash: {'mse': np.float32(0.010014627), 'snr': np.float32(-3.1738937), 'mel': np.float32(0.42801365), 'stoi': np.float64(0.9689482957380713)} | quality: Acceptable (good quality)
+eager: {'mse': np.float32(0.010577169), 'snr': np.float32(-3.4112406), 'mel': np.float32(0.42479107), 'stoi': np.float64(0.9690691176525283)} | quality: Acceptable (good quality)
+auto: {'mse': np.float32(0.010014627), 'snr': np.float32(-3.1738937), 'mel': np.float32(0.42801365), 'stoi': np.float64(0.9689482957380713)} | quality: Acceptable (good quality)
 
 === Ranking ===
 [('sdpa', np.float64(-0.18329784160760149)), ('flash', np.float64(-0.19276504530606714)), ('auto', np.float64(-0.19276504530606714)), ('eager', np.float64(-0.21487428742497816))]
 """
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Compare audio files against a reference.")
-    parser.add_argument("--ref", required=True, help="Path to reference wav file")
-    parser.add_argument("--base-dir", default=".", help="Base directory for reconstructed wav files")
+    parser.add_argument(
+        "--ref",
+        default="/Users/qibaoyuan/PycharmProjects/vllm-omni-qby/examples/offline_inference/mimo_audio/freetalk_朋友_剪.wav",
+        help="Path to reference wav file",
+    )
+    parser.add_argument(
+        "--base-dir",
+        default="/Users/qibaoyuan/PycharmProjects/vllm-omni-qby",
+        help="Base directory for reconstructed wav files",
+    )
     parser.add_argument(
         "--names",
         nargs="+",
