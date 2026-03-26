@@ -423,7 +423,7 @@ class Attention(nn.Module):
                 self.window_size,
             )
         else:
-            # === Fallback: eager matmul (MIMO_AUDIO_ATTN_IMPLEMENTATION=eager); mask 与 flash/SDPA 一致 ===
+            # === Fallback: eager matmul (MIMO_AUDIO_ATTN_IMPLEMENTATION=eager); ===
             cu_len = F.pad(torch.cumsum(seq_len, dim=0), (1, 0), "constant", 0).to(torch.long)
             attn_output = torch.zeros_like(hidden_states)
 
