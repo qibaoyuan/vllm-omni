@@ -456,15 +456,6 @@ class Attention(nn.Module):
                 self.window_size,
             )
 
-        attn_output = F.scaled_dot_product_attention(
-            query_states,
-            key_states,
-            value_states,
-            attn_mask=attn_mask,
-            is_causal=(self.causal and attn_mask is None),
-        )
-
-        attn_output = attn_output.transpose(1, 2).reshape(B, L, self.embed_dim)
         attn_output = self.out_proj(attn_output)
         return attn_output
 
