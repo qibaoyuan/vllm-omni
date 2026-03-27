@@ -52,6 +52,7 @@ def _build_varlen_attn_mask(
     if causal:
         ok &= j_idx <= i_idx
 
+    # Use finfo.min for half/bfloat stability in SDPA (same pattern as Transformers)
     neg = torch.finfo(dtype).min
     mask = torch.zeros(seq_len, seq_len, device=device, dtype=dtype)
     mask = mask.masked_fill(~ok, neg)
@@ -399,6 +400,7 @@ class Attention(nn.Module):
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
+
         self.window_size = tuple(window_size) if window_size is not None else (-1, -1)
 
         self.k_proj = nn.Linear(embed_dim, embed_dim, bias=False)
@@ -426,7 +428,7 @@ class Attention(nn.Module):
             key_states = apply_rotary_pos_emb(key_states, cos, sin)
 
         if _should_use_flash_attn(hidden_states):
-            # === Use flash-attn in GPU mode (when available) ===
+            # === Use flash-attn in GPU mode (when auto/flash and available) ===
             cu_len = F.pad(torch.cumsum(seq_len, dim=0), (1, 0), "constant", 0).to(torch.int32)
             max_seqlen = torch.max(seq_len).to(torch.int32).detach()
             attn_output = flash_attn_varlen_func(
@@ -443,7 +445,6 @@ class Attention(nn.Module):
             attn_output = attn_output.reshape(total_seq_len, self.embed_dim)
 
         else:
-            # === SDPA fallback for CPU / no flash_attn ===
             attn_output = _attention_forward_sdpa(
                 query_states,
                 key_states,
@@ -455,6 +456,15 @@ class Attention(nn.Module):
                 self.window_size,
             )
 
+        attn_output = F.scaled_dot_product_attention(
+            query_states,
+            key_states,
+            value_states,
+            attn_mask=attn_mask,
+            is_causal=(self.causal and attn_mask is None),
+        )
+
+        attn_output = attn_output.transpose(1, 2).reshape(B, L, self.embed_dim)
         attn_output = self.out_proj(attn_output)
         return attn_output
 
