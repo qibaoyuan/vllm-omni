@@ -251,8 +251,8 @@ class CUDAGraphMiMoDecoderWrapper:
         self,
         codes_chunks: torch.Tensor,
         chunk_input_lengths: list[int],
-        history_cache: StreamingCache = StreamingCache(),
-        streaming_config: StreamingConfig = StreamingConfig(),
+        history_cache: StreamingCache | None = None,
+        streaming_config: StreamingConfig | None = None,
         last_chunk: bool = False,
     ) -> tuple[list[torch.Tensor | None], StreamingCache]:
         """Streaming decode with CUDA Graph acceleration.
@@ -273,6 +273,10 @@ class CUDAGraphMiMoDecoderWrapper:
         Returns:
             (return_wavs, history_cache) — same contract as the original.
         """
+        if history_cache is None:
+            history_cache = StreamingCache()
+        if streaming_config is None:
+            streaming_config = StreamingConfig()
         tokenizer = self.tokenizer
         hidden_states = tokenizer.encoder.decode_vq(codes_chunks)
 

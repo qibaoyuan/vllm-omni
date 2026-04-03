@@ -706,12 +706,9 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
         audio_channels = self.streamer_config.audio_channels
 
         cg_wrapper = self._tokenizer_service.cuda_graph_wrapper
-        use_cuda_graph = cg_wrapper is not None and cg_wrapper.is_ready
+        cg_ready = cg_wrapper is not None and cg_wrapper.is_ready
 
-        audio_codes_list: list[torch.Tensor] = []
-        hidden_list: list[torch.Tensor] = []
-        lengths: list[int] = []
-        valid_indices: list[int] = []
+        extracted: list[tuple[int, torch.Tensor]] = []
 
         for i, req_codes in enumerate(request_codes_list):
             if req_codes is None or req_codes.numel() == 0:
@@ -729,37 +726,33 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
             if audio_codes is None or audio_codes.numel() == 0:
                 continue
 
-            if use_cuda_graph:
-                audio_codes_list.append(audio_codes.to(self.device))
-                lengths.append(audio_codes.shape[-1])
-            else:
-                hs = tokenizer.encoder.decode_vq(audio_codes.to(self.device))
-                hidden_list.append(hs)
-                lengths.append(hs.size(0))
+            extracted.append((i, audio_codes))
 
-            valid_indices.append(i)
-
-        if not valid_indices:
+        if not extracted:
             return [empty] * num_req
 
-        if use_cuda_graph and len(valid_indices) == 1:
-            wav_out = cg_wrapper.decode(audio_codes_list[0])
+        valid_indices = [t[0] for t in extracted]
+        # CUDA graph decode is single-batch only; avoid duplicate decode_vq for len>1.
+        use_cuda_graph = cg_ready and len(extracted) == 1
+
+        if use_cuda_graph:
+            wav_out = cg_wrapper.decode(extracted[0][1].to(self.device))
             wav = wav_out.squeeze(0).squeeze(0)
             cfg = tokenizer.config
             frames_per_token = cfg.avg_pooler * cfg.stride_size * cfg.hop_length
-            valid_len = lengths[0] * frames_per_token
+            valid_len = extracted[0][1].shape[-1] * frames_per_token
             if wav.numel() > valid_len:
                 wav = wav[:valid_len]
             result: list[torch.Tensor] = [empty] * num_req
             result[valid_indices[0]] = wav.to(dtype=torch.float32).reshape(-1)
             return result
 
-        if use_cuda_graph:
-            lengths = []
-            for ac in audio_codes_list:
-                hs = tokenizer.encoder.decode_vq(ac)
-                hidden_list.append(hs)
-                lengths.append(hs.size(0))
+        hidden_list: list[torch.Tensor] = []
+        lengths: list[int] = []
+        for _, audio_codes in extracted:
+            hs = tokenizer.encoder.decode_vq(audio_codes.to(self.device))
+            hidden_list.append(hs)
+            lengths.append(hs.size(0))
 
         if len(hidden_list) == 1:
             packed_hs = hidden_list[0]
@@ -810,12 +803,9 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
         audio_channels = self.streamer_config.audio_channels
 
         cg_wrapper = self._tokenizer_service.cuda_graph_wrapper
-        use_cuda_graph = cg_wrapper is not None and cg_wrapper.is_ready
-        audio_codes_list: list[torch.Tensor] = []
+        cg_ready = cg_wrapper is not None and cg_wrapper.is_ready
 
-        hidden_list: list[torch.Tensor] = []
-        lengths: list[int] = []
-        valid_indices: list[int] = []
+        extracted: list[tuple[int, torch.Tensor]] = []
         context_sizes: list[int] = []
 
         for i, req_codes in enumerate(request_codes_list):
@@ -834,15 +824,7 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
             if audio_codes is None or audio_codes.numel() == 0:
                 continue
 
-            if use_cuda_graph:
-                audio_codes_list.append(audio_codes.to(self.device))
-                lengths.append(audio_codes.shape[-1])
-            else:
-                hs = tokenizer.encoder.decode_vq(audio_codes.to(self.device))
-                hidden_list.append(hs)
-                lengths.append(hs.size(0))
-
-            valid_indices.append(i)
+            extracted.append((i, audio_codes))
 
             num_flat = req_codes.numel() if req_codes.ndim == 1 else req_codes.shape[-1]
             elt_per_group = flat_codec_group_element_count(group_size, audio_channels)
@@ -862,16 +844,19 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
                 ctx = 0 if num_chunks <= chunk_sz else default_left_context_size
             context_sizes.append(ctx)
 
-        if not valid_indices:
+        if not extracted:
             return [empty] * num_req
+
+        valid_indices = [t[0] for t in extracted]
+        use_cuda_graph = cg_ready and len(extracted) == 1
 
         cfg = tokenizer.config
         frames_per_token = cfg.avg_pooler * cfg.stride_size * cfg.hop_length
 
-        if use_cuda_graph and len(valid_indices) == 1:
-            wav_out = cg_wrapper.decode(audio_codes_list[0])
+        if use_cuda_graph:
+            wav_out = cg_wrapper.decode(extracted[0][1].to(self.device))
             wav = wav_out.squeeze(0).squeeze(0)
-            valid_len = lengths[0] * frames_per_token
+            valid_len = extracted[0][1].shape[-1] * frames_per_token
             if wav.numel() > valid_len:
                 wav = wav[:valid_len]
             drop = context_sizes[0] * self.total_upsample
@@ -883,12 +868,12 @@ class MiMoAudioToken2WavForConditionalGenerationVLLM(nn.Module, SupportsPP):
             result[valid_indices[0]] = wav.to(dtype=torch.float32).reshape(-1)
             return result
 
-        if use_cuda_graph:
-            lengths = []
-            for ac in audio_codes_list:
-                hs = tokenizer.encoder.decode_vq(ac)
-                hidden_list.append(hs)
-                lengths.append(hs.size(0))
+        hidden_list: list[torch.Tensor] = []
+        lengths: list[int] = []
+        for _, audio_codes in extracted:
+            hs = tokenizer.encoder.decode_vq(audio_codes.to(self.device))
+            hidden_list.append(hs)
+            lengths.append(hs.size(0))
 
         if len(hidden_list) == 1:
             packed_hs = hidden_list[0]

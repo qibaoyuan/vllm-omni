@@ -892,9 +892,9 @@ class CausalConvTranspose1d(nn.Module):
         hidden_states = self.norm(hidden_states)
         hidden_states = hidden_states.transpose(2, 1)  # (N, C, L) -> (N, L, C)
 
-        casual_padding_right = max(0, kernel_size - stride)
-        hidden_states = hidden_states[:, : hidden_states.shape[1] - casual_padding_right, :]
-        output_length = (input_length - 1) * stride + kernel_size - casual_padding_right
+        causal_padding_right = max(0, kernel_size - stride)
+        hidden_states = hidden_states[:, : hidden_states.shape[1] - causal_padding_right, :]
+        output_length = (input_length - 1) * stride + kernel_size - causal_padding_right
         sequence_mask, _ = get_sequence_mask(hidden_states, output_length)
         if output_dim <= 2:
             hidden_states = torch.masked_select(hidden_states, sequence_mask).view(-1, self.out_channels)
@@ -911,9 +911,9 @@ class CausalConvTranspose1d(nn.Module):
         hidden_states = self.conv(hidden_states)
         hidden_states = self.norm(hidden_states)
         hidden_states = hidden_states.transpose(2, 1)  # (1, C, L') -> (1, L', C)
-        casual_padding_right = max(0, kernel_size - stride)
-        if casual_padding_right > 0:
-            hidden_states = hidden_states[:, : hidden_states.shape[1] - casual_padding_right, :]
+        causal_padding_right = max(0, kernel_size - stride)
+        if causal_padding_right > 0:
+            hidden_states = hidden_states[:, : hidden_states.shape[1] - causal_padding_right, :]
         return hidden_states
 
 
