@@ -63,9 +63,9 @@ def mock_engine_client(
     default_other_params,
     mocker: MockerFixture,
 ):
-    """Create mock engine client with stage_list and default_sampling_params_list."""
+    """Create mock engine client with stage_configs and default_sampling_params_list."""
     engine_client = mocker.MagicMock()
-    engine_client.stage_list = [mock_comprehension_stage, mock_other_stage]
+    engine_client.stage_configs = [mock_comprehension_stage, mock_other_stage]
     engine_client.default_sampling_params_list = [
         default_comprehension_params,
         default_other_params,
@@ -285,6 +285,185 @@ def test_apply_request_overrides_applies_values(serving_chat, mock_request, defa
 
 
 # =============================================================================
+# Tests for empty-list handling in _apply_request_overrides
+# =============================================================================
+
+
+def test_apply_overrides_empty_stop_list_preserves_default(serving_chat, mocker):
+    """Test that request.stop=[] does NOT override YAML default stop words."""
+    default_params = SamplingParams(temperature=0.5, stop=["<|im_end|>"])
+    request = mocker.MagicMock()
+    request.temperature = None
+    request.top_p = None
+    request.top_k = None
+    request.max_tokens = None
+    request.min_tokens = None
+    request.seed = None
+    request.ignore_eos = None
+    request.stop = []  # empty list — should be treated as "not set"
+    request.stop_token_ids = None
+    request.frequency_penalty = None
+    request.presence_penalty = None
+
+    result = serving_chat._apply_request_overrides(default_params, request)
+
+    assert result.stop == ["<|im_end|>"]  # YAML default preserved
+
+
+def test_apply_overrides_nonempty_stop_list_overrides_default(serving_chat, mocker):
+    """Test that request.stop=["\\n"] overrides YAML default stop words."""
+    default_params = SamplingParams(temperature=0.5, stop=["<|im_end|>"])
+    request = mocker.MagicMock()
+    request.temperature = None
+    request.top_p = None
+    request.top_k = None
+    request.max_tokens = None
+    request.min_tokens = None
+    request.seed = None
+    request.ignore_eos = None
+    request.stop = ["\n"]  # non-empty list — should override
+    request.stop_token_ids = None
+    request.frequency_penalty = None
+    request.presence_penalty = None
+
+    result = serving_chat._apply_request_overrides(default_params, request)
+
+    assert result.stop == ["\n"]  # Overridden by request
+
+
+def test_apply_overrides_empty_stop_token_ids_preserves_default(serving_chat, mocker):
+    """Test that request.stop_token_ids=[] does NOT override YAML default."""
+    default_params = SamplingParams(temperature=0.5, stop_token_ids=[2, 3])
+    request = mocker.MagicMock()
+    request.temperature = None
+    request.top_p = None
+    request.top_k = None
+    request.max_tokens = None
+    request.min_tokens = None
+    request.seed = None
+    request.ignore_eos = None
+    request.stop = None
+    request.stop_token_ids = []  # empty list — should be treated as "not set"
+    request.frequency_penalty = None
+    request.presence_penalty = None
+
+    result = serving_chat._apply_request_overrides(default_params, request)
+
+    assert result.stop_token_ids == [2, 3]  # YAML default preserved
+
+
+def test_apply_overrides_nonempty_stop_token_ids_overrides_default(serving_chat, mocker):
+    """Test that request.stop_token_ids=[100] overrides YAML default."""
+    default_params = SamplingParams(temperature=0.5, stop_token_ids=[2, 3])
+    request = mocker.MagicMock()
+    request.temperature = None
+    request.top_p = None
+    request.top_k = None
+    request.max_tokens = None
+    request.min_tokens = None
+    request.seed = None
+    request.ignore_eos = None
+    request.stop = None
+    request.stop_token_ids = [100]  # non-empty list — should override
+    request.frequency_penalty = None
+    request.presence_penalty = None
+
+    result = serving_chat._apply_request_overrides(default_params, request)
+
+    assert result.stop_token_ids == [100]  # Overridden by request
+
+
+def test_apply_overrides_mixed_empty_and_nonempty_lists(serving_chat, mocker):
+    """Test mixing empty and non-empty list fields with scalar fields."""
+    default_params = SamplingParams(
+        temperature=0.4,
+        stop=["<|end|>"],
+        stop_token_ids=[2],
+    )
+    request = mocker.MagicMock()
+    request.temperature = 0.9
+    request.top_p = None
+    request.top_k = None
+    request.max_tokens = None
+    request.min_tokens = None
+    request.seed = None
+    request.ignore_eos = None
+    request.stop = []  # empty — should NOT override
+    request.stop_token_ids = [100, 200]  # non-empty — SHOULD override
+    request.frequency_penalty = None
+    request.presence_penalty = None
+
+    result = serving_chat._apply_request_overrides(default_params, request)
+
+    assert result.temperature == 0.9  # Scalar override works
+    assert result.stop == ["<|end|>"]  # Empty list did NOT override
+    assert result.stop_token_ids == [100, 200]  # Non-empty list DID override
+
+
+def test_apply_overrides_none_scalar_still_preserves_default(serving_chat, mocker):
+    """Regression: ensure None scalar values still don't override defaults."""
+    default_params = SamplingParams(temperature=0.5, max_tokens=100, seed=42)
+    request = mocker.MagicMock()
+    request.temperature = None
+    request.top_p = None
+    request.top_k = None
+    request.max_tokens = None
+    request.min_tokens = None
+    request.seed = None
+    request.ignore_eos = None
+    request.stop = None
+    request.stop_token_ids = None
+    request.frequency_penalty = None
+    request.presence_penalty = None
+
+    result = serving_chat._apply_request_overrides(default_params, request)
+
+    assert result.temperature == 0.5
+    assert result.max_tokens == 100
+    assert result.seed == 42
+
+
+def test_apply_overrides_both_lists_empty_preserves_defaults(serving_chat, mocker):
+    """Test that both stop=[] and stop_token_ids=[] preserve YAML defaults."""
+    default_params = SamplingParams(
+        temperature=0.5,
+        stop=["<|end|>", "\\n"],
+        stop_token_ids=[2, 32000],
+    )
+    request = mocker.MagicMock()
+    request.temperature = None
+    request.top_p = None
+    request.top_k = None
+    request.max_tokens = None
+    request.min_tokens = None
+    request.seed = None
+    request.ignore_eos = None
+    request.stop = []
+    request.stop_token_ids = []
+    request.frequency_penalty = None
+    request.presence_penalty = None
+
+    result = serving_chat._apply_request_overrides(default_params, request)
+
+    assert result.stop == ["<|end|>", "\\n"]
+    assert result.stop_token_ids == [2, 32000]
+
+
+def test_build_sampling_params_list_empty_stop_preserves_yaml(serving_chat, mock_request):
+    """Test that empty stop list in request preserves YAML defaults via
+    _build_sampling_params_list_from_request."""
+    mock_request.stop = []
+    mock_request.stop_token_ids = []
+
+    result = serving_chat._build_sampling_params_list_from_request(mock_request)
+
+    comprehension_params = result[0]
+    # Empty lists should NOT override — YAML defaults are preserved
+    assert comprehension_params.stop == []
+    assert comprehension_params.stop_token_ids == []
+
+
+# =============================================================================
 # Tests for _get_comprehension_stage_index
 # =============================================================================
 
@@ -311,7 +490,7 @@ def test_get_comprehension_stage_index_finds_second_stage(mocker: MockerFixture)
     comprehension.is_comprehension = True
 
     instance.engine_client = mocker.MagicMock()
-    instance.engine_client.stage_list = [other, comprehension]
+    instance.engine_client.stage_configs = [other, comprehension]
 
     assert instance._get_comprehension_stage_index() == 1
 
@@ -328,7 +507,7 @@ def test_get_comprehension_stage_index_raises_when_not_found(mocker: MockerFixtu
     stage2.is_comprehension = False
 
     instance.engine_client = mocker.MagicMock()
-    instance.engine_client.stage_list = [stage1, stage2]
+    instance.engine_client.stage_configs = [stage1, stage2]
 
     with pytest.raises(ValueError, match="No comprehension stage"):
         instance._get_comprehension_stage_index()

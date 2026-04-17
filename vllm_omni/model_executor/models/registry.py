@@ -57,6 +57,11 @@ _OMNI_MODELS = {
         "cosyvoice3",
         "CosyVoice3Model",
     ),
+    "OmniVoiceModel": (
+        "omnivoice",
+        "omnivoice",
+        "OmniVoiceModel",
+    ),
     "MammothModa2Qwen2ForCausalLM": (
         "mammoth_moda2",
         "mammoth_moda2",
@@ -128,6 +133,46 @@ _OMNI_MODELS = {
         "hunyuan_image3",
         "hunyuan_image3",
         "HunyuanImage3ForConditionalGeneration",
+    ),
+    ## fish_speech (Fish Speech S2 Pro)
+    "FishSpeechSlowARForConditionalGeneration": (
+        "fish_speech",
+        "fish_speech_slow_ar",
+        "FishSpeechSlowARForConditionalGeneration",
+    ),
+    "FishSpeechDACDecoder": (
+        "fish_speech",
+        "fish_speech_dac_decoder",
+        "FishSpeechDACDecoder",
+    ),
+    ## VoxCPM
+    "VoxCPMForConditionalGeneration": (
+        "voxcpm",
+        "voxcpm",
+        "VoxCPMForConditionalGeneration",
+    ),
+    ## VoxCPM2
+    "VoxCPM2TalkerForConditionalGeneration": (
+        "voxcpm2",
+        "voxcpm2_talker",
+        "VoxCPM2TalkerForConditionalGeneration",
+    ),
+    ## Voxtral TTS
+    "VoxtralTTSForConditionalGeneration": (
+        "voxtral_tts",
+        "voxtral_tts",
+        "VoxtralTTSForConditionalGeneration",
+    ),
+    "VoxtralTTSAudioGeneration": (
+        "voxtral_tts",
+        "voxtral_tts_audio_generation",
+        "VoxtralTTSAudioGenerationForConditionalGeneration",
+    ),
+    "VoxtralTTSAudioTokenizer": ("voxtral_tts", "voxtral_tts_audio_tokenizer", "VoxtralTTSAudioTokenizer"),
+    "DyninOmniForConditionalGeneration": (
+        "dynin_omni",
+        "dynin_omni",
+        "DyninOmniForConditionalGeneration",
     ),
 }
 

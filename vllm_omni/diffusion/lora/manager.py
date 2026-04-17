@@ -4,9 +4,11 @@
 import math
 import time
 from collections import OrderedDict
+from typing import get_args
 
 import torch
 import torch.nn as nn
+from vllm.config.lora import MaxLoRARanks
 from vllm.logger import init_logger
 from vllm.lora.layers import BaseLayerWithLoRA
 from vllm.lora.lora_model import LoRAModel
@@ -37,6 +39,9 @@ class DiffusionLoRAManager:
     Reuses vLLM's LoRA infrastructure, adapted for diffusion pipelines.
     Uses LRU cache management similar to LRUCacheLoRAModelManager.
     """
+
+    # Valid max allowed ranks for LoRA in vLLM
+    _VALID_MAX_RANKS: list[int] = sorted(get_args(MaxLoRARanks))
 
     def __init__(
         self,
@@ -213,10 +218,16 @@ class DiffusionLoRAManager:
             lora_scale: The external scale for the LoRA adapter.
         """
         if lora_request is None:
+            if self._active_adapter_id is None:
+                logger.debug("No lora_request provided and adapters are already inactive")
+                return
             logger.debug("No lora_request provided, deactivating all LoRA adapters")
             self._deactivate_all_adapters()
             return
         elif math.isclose(0.0, lora_scale):
+            if self._active_adapter_id is None:
+                logger.debug("Received LoRA scale 0 with adapters already inactive")
+                return
             logger.warning("Received a request with LoRA scale 0; deactivating all LoRA adapters")
             self._deactivate_all_adapters()
             return
@@ -355,12 +366,16 @@ class DiffusionLoRAManager:
             fully_sharded_loras=False,
         )
 
-        for component_name in ("transformer", "transformer_2", "dit"):
+        for component_name in ("transformer", "transformer_2", "dit", "bagel"):
             if not hasattr(self.pipeline, component_name):
                 continue
             component = getattr(self.pipeline, component_name)
             if not isinstance(component, nn.Module):
                 continue
+
+            # Collect replacements first to avoid mutating the module tree
+            # while iterating over named_modules().
+            pending_replacements: list[tuple[str, str, nn.Module, list[str]]] = []
 
             for module_name, module in component.named_modules(remove_duplicate=False):
                 # Don't recurse into already-replaced LoRA wrappers. Their
@@ -390,6 +405,9 @@ class DiffusionLoRAManager:
                     if not should_replace:
                         continue
 
+                pending_replacements.append((module_name, full_module_name, module, packed_modules_list))
+
+            for module_name, full_module_name, module, packed_modules_list in pending_replacements:
                 lora_layer = from_layer_diffusion(
                     layer=module,
                     max_loras=1,
@@ -413,11 +431,10 @@ class DiffusionLoRAManager:
         if min_rank <= self._max_lora_rank:
             return
 
-        if min_rank <= 0:
-            raise ValueError(f"Invalid LoRA rank: {min_rank}")
+        valid_max_rank = self._get_smallest_valid_max_rank(min_rank)
 
-        logger.info("Increasing max LoRA rank: %d -> %d", self._max_lora_rank, min_rank)
-        self._max_lora_rank = min_rank
+        logger.info("Increasing max LoRA rank: %d -> %d", self._max_lora_rank, valid_max_rank)
+        self._max_lora_rank = valid_max_rank
 
         if not self._lora_modules:
             return
@@ -440,6 +457,18 @@ class DiffusionLoRAManager:
             active_scale = self._adapter_scales[active_id]
             self._active_adapter_id = None
             self._activate_adapter(active_id, active_scale)
+
+    @classmethod
+    def _get_smallest_valid_max_rank(cls, min_rank: int) -> int:
+        """Given a LoRA rank, get the smallest max rank that can support it."""
+        if min_rank <= 0:
+            raise ValueError(f"Invalid LoRA rank: {min_rank}")
+
+        allowed_ranks = [rank for rank in cls._VALID_MAX_RANKS if rank >= min_rank]
+        if not allowed_ranks:
+            raise ValueError(f"LoRA rank of {min_rank} exceeds max allowed rank of {max(cls._VALID_MAX_RANKS)}")
+
+        return min(allowed_ranks)
 
     def _get_lora_weights(
         self,
@@ -589,6 +618,9 @@ class DiffusionLoRAManager:
         self._update_adapter_scale(adapter_id, scale)
 
     def _deactivate_all_adapters(self) -> None:
+        if self._active_adapter_id is None:
+            logger.debug("All adapters already inactive")
+            return
         logger.info("Deactivating all adapters: %d layers", len(self._lora_modules))
         for lora_layer in self._lora_modules.values():
             lora_layer.reset_lora(0)

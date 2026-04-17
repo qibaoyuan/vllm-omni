@@ -20,6 +20,7 @@ from vllm.compilation.decorators import support_torch_compile
 from vllm.config import VllmConfig
 from vllm.config.multimodal import BaseDummyOptions
 from vllm.distributed import get_pp_group
+from vllm.inputs import MultiModalDataDict
 from vllm.logger import init_logger
 from vllm.model_executor.layers.fused_moe import SharedFusedMoE
 from vllm.model_executor.layers.linear import (
@@ -58,7 +59,6 @@ from vllm.model_executor.models.utils import (
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.multimodal.image import rgba_to_rgb
 from vllm.multimodal.inputs import (
-    MultiModalDataDict,
     MultiModalFeatureSpec,
     MultiModalFieldConfig,
     MultiModalKwargsItems,
@@ -77,7 +77,9 @@ from vllm.multimodal.processing import (
 from vllm.sequence import IntermediateTensors
 from vllm.transformers_utils.tokenizer import get_tokenizer
 from vllm.utils.tensor_schema import TensorSchema
+from vllm.v1.outputs import SamplerOutput
 from vllm.v1.sample.metadata import SamplingMetadata
+from vllm.v1.sample.sampler import Sampler
 
 from vllm_omni.model_executor.models.hunyuan_image3.autoencoder_kl_3d import AutoencoderKLConv3D
 from vllm_omni.model_executor.models.hunyuan_image3.siglip2 import LightProjector, Siglip2VisionTransformer
@@ -175,8 +177,11 @@ class HunyuanModel(HunYuanModel):
                     return True
             return False
 
+        skipped_unexpected: set[str] = set()
+
         for name, loaded_weight in weights:
             if contains_unexpected_keyword(name, unexpected_keywords):
+                skipped_unexpected.add(name)
                 continue
 
             if "rotary_emb.inv_freq" in name:
@@ -362,6 +367,17 @@ class HunyuanModel(HunYuanModel):
                 weight_loader = getattr(param, "weight_loader", default_weight_loader)
                 weight_loader(param, loaded_weight)
                 loaded_params.add(name)
+
+        if skipped_unexpected:
+            logger.warning_once(
+                "Skipped %d weights matching unexpected_keywords "
+                "(e.g. vae, vision_model, patch_embed, timestep_emb). "
+                "If upstream renamed components, these may be silently "
+                "lost. Skipped names: %s",
+                len(skipped_unexpected),
+                sorted(skipped_unexpected)[:10],
+            )
+
         return loaded_params
 
 
@@ -1054,6 +1070,79 @@ class HunyuanImage3MultiModalProcessor(BaseMultiModalProcessor[HunyuanImage3Proc
         ]
 
 
+class HunyuanImage3RotaryEmbedding(nn.Module):
+    """Custom interleaved 2D Rotary Embedding for HunyuanImage3.
+
+    The original HunyuanImage3 ``build_2d_rope`` interleaves y (height) and
+    x (width) positions across consecutive frequencies::
+
+        theta = inv_freq.reshape(n_elem // 4, 2)
+        idx_theta[2k]   = y_pos * theta[k, 0]   # even freq -> y
+        idx_theta[2k+1] = x_pos * theta[k, 1]   # odd  freq -> x
+
+    vLLM's standard ``MRotaryEmbedding`` instead assigns *contiguous* blocks
+    of frequencies to each position dimension, producing different encodings
+    for the same positions.  This class re-implements the original interleaved
+    pattern so that pre-trained weights work correctly.
+
+    Reference: https://kexue.fm/archives/10352
+    """
+
+    def __init__(self, head_dim: int, rope_theta: float = 10000.0) -> None:
+        super().__init__()
+        self.head_dim = head_dim
+        assert head_dim % 4 == 0, f"head_dim must be divisible by 4, got {head_dim}"
+        inv_freq = 1.0 / (rope_theta ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+    def forward(
+        self,
+        positions: torch.Tensor,
+        query: torch.Tensor,
+        key: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if positions.dim() == 2 and positions.shape[0] == 3:
+            y_pos = positions[1].float()
+            x_pos = positions[2].float()
+        else:
+            # 1D fallback: both dims get the same position → standard RoPE
+            y_pos = positions.float()
+            x_pos = positions.float()
+
+        num_tokens = y_pos.shape[0]
+        dtype = query.dtype
+        query_shape = query.shape
+        key_shape = key.shape
+
+        inv_freq = self.inv_freq.to(device=y_pos.device, dtype=torch.float32)
+
+        inv_freq_y = inv_freq[0::2]  # even indices -> y
+        inv_freq_x = inv_freq[1::2]  # odd  indices -> x
+
+        y_freqs = y_pos.unsqueeze(-1) * inv_freq_y.unsqueeze(0)
+        x_freqs = x_pos.unsqueeze(-1) * inv_freq_x.unsqueeze(0)
+
+        # Interleave: [y*θ₀, x*θ₁, y*θ₂, x*θ₃, ...]
+        freqs = torch.stack([y_freqs, x_freqs], dim=-1).reshape(num_tokens, -1)
+
+        emb = torch.cat([freqs, freqs], dim=-1)
+        cos = emb.cos().to(dtype).unsqueeze(1)
+        sin = emb.sin().to(dtype).unsqueeze(1)
+
+        query = query.view(num_tokens, -1, self.head_dim)
+        key = key.view(num_tokens, -1, self.head_dim)
+
+        query = query * cos + self._rotate_half(query) * sin
+        key = key * cos + self._rotate_half(key) * sin
+
+        return query.view(query_shape), key.view(key_shape)
+
+    def _rotate_half(self, x: torch.Tensor) -> torch.Tensor:
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
+
+
 @MULTIMODAL_REGISTRY.register_processor(
     HunyuanImage3MultiModalProcessor,
     info=HunyuanImage3ProcessingInfo,
@@ -1075,6 +1164,8 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
     """
 
     HunyuanImage3Inputs: TypeAlias = HunyuanImage3PixelInputs
+
+    prefer_model_sampler = True
 
     packed_modules_mapping = {
         "qkv_proj": [
@@ -1126,6 +1217,10 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
         else:
             self.lm_head = PPMissingLayer()
 
+        # --- AR-stage components ---
+        # These are needed for image encoding in the AR stage.
+        # If a future text-only stage is added, gate on vllm_config.model_config.model_stage.
+
         # vae
         self.vae = AutoencoderKLConv3D.from_config(config.vae)
         self.patch_embed = UNetDown(
@@ -1153,6 +1248,101 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
         self._mrope_joint_img_sep_token_id = tokenizer.convert_tokens_to_ids("<joint_img_sep>")
         self._mrope_max_num_patches = config.vit_processor.get("max_num_patches", 729)
 
+        # Special token IDs for logits processors (stage transitions).
+        # These mirror the official tokenization_hunyuan_image_3.py setup.
+        self._end_of_think_id = tokenizer.convert_tokens_to_ids("</think>")
+        self._recaption_id = tokenizer.convert_tokens_to_ids("<recaption>")
+        self._end_of_recaption_id = tokenizer.convert_tokens_to_ids("</recaption>")
+        self._answer_id = tokenizer.convert_tokens_to_ids("<answer>")
+        self._end_of_answer_id = tokenizer.convert_tokens_to_ids("</answer>")
+        image_base_size = getattr(config, "image_base_size", 1024)
+        self._size_token_id = tokenizer.convert_tokens_to_ids(f"<img_size_{image_base_size}>")
+        self._start_ratio_id = tokenizer.convert_tokens_to_ids("<img_ratio_0>")
+        self._end_ratio_id = tokenizer.convert_tokens_to_ids("<img_ratio_32>")
+        ratio_33 = tokenizer.convert_tokens_to_ids("<img_ratio_33>")
+        ratio_36 = tokenizer.convert_tokens_to_ids("<img_ratio_36>")
+        self._ratio_other_slices = [(ratio_33, ratio_36 + 1)]
+        # Build the full set of ratio token IDs for use as stop tokens.
+        self._all_ratio_ids = set(range(self._start_ratio_id, self._end_ratio_id + 1))
+        for s, e in self._ratio_other_slices:
+            self._all_ratio_ids.update(range(s, e))
+
+        # Determine mode: comprehension (I2T/T2T) vs generation (IT2I/T2I).
+        engine_output_type = getattr(vllm_config.model_config, "engine_output_type", None)
+        self._is_comprehension = engine_output_type in (None, "text")
+
+        # For comprehension mode, block image generation tokens but allow
+        # text structure tokens (<think>, <answer>, etc.) so the model can
+        # follow its natural generation pattern. Stop tokens in YAML will
+        # terminate at </answer> or EOS.
+        self._blocked_token_ids: set[int] = set()
+        if self._is_comprehension:
+            self._blocked_token_ids.update(
+                [
+                    self._mrope_boi_token_id,  # <boi>
+                    self._mrope_eoi_token_id,  # <eoi>
+                    self._size_token_id,  # <img_size_*>
+                ]
+            )
+            self._blocked_token_ids.update(self._all_ratio_ids)
+
+        # For generation mode, build stage transition map.
+        # Official logic: </think> → [<recaption>],
+        #   </recaption> → [<answer>, <boi>, <img_size_*>]
+        # After <img_size_*>, restrict vocab to ratio tokens only.
+        # Stage-transition forced sequences, keyed by trigger token.
+        self._stage_transitions: dict[int, list[int]] = {}
+        if not self._is_comprehension:
+            self._stage_transitions[self._end_of_think_id] = [
+                self._recaption_id,
+            ]
+            self._stage_transitions[self._end_of_recaption_id] = [
+                self._answer_id,
+                self._mrope_boi_token_id,
+                self._size_token_id,
+            ]
+
+        self._sampler: Sampler | None = None
+        self._eos_token_id: int = tokenizer.eos_token_id
+
+        self._replace_rotary_embeddings()
+
+    def _replace_rotary_embeddings(self):
+        """Replace vLLM's standard MRotaryEmbedding with the custom
+        interleaved 2D RoPE that matches the original HunyuanImage3 model."""
+        rope_theta = getattr(self.config, "rope_theta", 10000.0)
+        head_dim = getattr(
+            self.config,
+            "head_dim",
+            getattr(
+                self.config,
+                "attention_head_dim",
+                self.config.hidden_size // self.config.num_attention_heads,
+            ),
+        )
+        custom_rope = HunyuanImage3RotaryEmbedding(
+            head_dim=head_dim,
+            rope_theta=rope_theta,
+        )
+        replaced = 0
+        for layer in self.model.layers:
+            if hasattr(layer, "self_attn") and hasattr(layer.self_attn, "rotary_emb"):
+                layer.self_attn.rotary_emb = custom_rope
+                replaced += 1
+        logger.info(
+            "Replaced %d rotary embeddings with HunyuanImage3RotaryEmbedding "
+            "(interleaved 2D RoPE, head_dim=%d, rope_theta=%.1f)",
+            replaced,
+            head_dim,
+            rope_theta,
+        )
+        if replaced == 0:
+            raise RuntimeError(
+                "HunyuanImage3: _replace_rotary_embeddings replaced 0 layers. "
+                "The custom interleaved 2D mRoPE is not active — model outputs "
+                "will be incorrect. Check that model.layers[*].self_attn.rotary_emb exists."
+            )
+
     def _parse_and_validate_image_input(
         self,
         **kwargs: dict[str, Any],
@@ -1167,6 +1357,10 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
         vae_token_grid_hw = kwargs.pop("vae_token_grid_hw", None)
 
         if vit_pixel_values is None or vae_pixel_values is None:
+            return None
+
+        # Handle empty batch (e.g., during profiling with 0 images / T2T mode)
+        if vit_pixel_values.numel() == 0 or vae_pixel_values.numel() == 0:
             return None
 
         return HunyuanImage3PixelInputs(
@@ -1328,7 +1522,6 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
         multimodal_embeddings: MultiModalEmbeddings | None = None,
         *,
         is_multimodal: torch.Tensor | None = None,
-        handle_oov_mm_token: bool = False,
     ) -> torch.Tensor:
         """Embed input IDs with optional multimodal embeddings."""
         # Get text embeddings
@@ -1368,6 +1561,112 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
         logits = self.logits_processor(self.lm_head, hidden_states)
         return logits
 
+    # ------------------------------------------------------------------
+    # Custom sampler — applies HunyuanImage3-specific logits processors
+    # before the standard sampling step.
+    #
+    # Comprehension (I2T / T2T):
+    #   Block generation-specific special tokens so sampling can't
+    #   accidentally produce <answer>, <boi>, ratio tokens, etc.
+    #
+    # Generation (IT2I / T2I think):
+    #   1. _StageTransitionLogitsProcessor — force token sequences at
+    #      transition boundaries (</think> → <recaption>, etc.)
+    #   2. _ConditionalSliceVocabLogitsProcessor — after <img_size_*>,
+    #      restrict vocab to ratio tokens only (greedy).
+    # ------------------------------------------------------------------
+
+    def sample(
+        self,
+        logits: torch.Tensor,
+        sampling_metadata: SamplingMetadata,
+    ) -> SamplerOutput | None:
+        if logits is None or logits.numel() == 0:
+            return None
+
+        if self._sampler is None:
+            self._sampler = Sampler()
+
+        min_score = torch.finfo(logits.dtype).min
+
+        assert logits.shape[0] == 1, f"HunyuanImage3 sampler requires max_num_seqs=1, got batch size {logits.shape[0]}"
+
+        for req_idx in range(logits.shape[0]):
+            decoded_tokens: list[int] = (
+                sampling_metadata.output_token_ids[req_idx] if req_idx < len(sampling_metadata.output_token_ids) else []
+            )
+            last_token = decoded_tokens[-1] if decoded_tokens else -1
+
+            if self._is_comprehension:
+                for tid in self._blocked_token_ids:
+                    logits[req_idx, tid] = min_score
+            else:
+                forced = self._get_forced_token(decoded_tokens)
+                if forced is not None:
+                    logits[req_idx].fill_(min_score)
+                    logits[req_idx, forced] = 0
+                elif last_token == self._size_token_id:
+                    self._apply_ratio_restriction(logits, req_idx, min_score)
+                elif last_token in self._all_ratio_ids:
+                    logits[req_idx].fill_(min_score)
+                    logits[req_idx, self._eos_token_id] = 0
+
+        return self._sampler(logits=logits, sampling_metadata=sampling_metadata)
+
+    def _get_forced_token(self, decoded_tokens: list[int]) -> int | None:
+        """Derive the next forced token from output history (stateless).
+
+        Scans decoded_tokens backwards for the most recent trigger token,
+        then prefix-matches the forced sequence against what followed.
+        Returns the next token to force, or None if the sequence is complete
+        or history has diverged from the expected forced sequence.
+        """
+        for i in range(len(decoded_tokens) - 1, -1, -1):
+            trigger = decoded_tokens[i]
+            if trigger not in self._stage_transitions:
+                continue
+
+            forced_seq = self._stage_transitions[trigger]
+            emitted = decoded_tokens[i + 1 :]
+
+            matched = 0
+            for expected, actual in zip(forced_seq, emitted):
+                if actual != expected:
+                    # History diverged from the expected forced sequence.
+                    # Stop applying transition forcing for safety.
+                    return None
+                matched += 1
+
+            if matched < len(forced_seq):
+                return forced_seq[matched]
+            return None
+
+        return None
+
+    def _apply_ratio_restriction(
+        self,
+        logits: torch.Tensor,
+        req_idx: int,
+        min_score: float,
+    ) -> None:
+        """Port of official _ConditionalSliceVocabLogitsProcessor.__call__.
+
+        After the size token, only allow ratio tokens and pick greedily.
+        """
+        original = logits[req_idx].clone()
+        logits[req_idx].fill_(min_score)
+        # Allow primary ratio range.
+        logits[req_idx, self._start_ratio_id : self._end_ratio_id + 1] = original[
+            self._start_ratio_id : self._end_ratio_id + 1
+        ]
+        # Allow extra ratio slices.
+        for s, e in self._ratio_other_slices:
+            logits[req_idx, s:e] = original[s:e]
+        # Force greedy: keep only the argmax.
+        max_id = logits[req_idx].argmax().item()
+        logits[req_idx].fill_(min_score)
+        logits[req_idx, max_id] = 0
+
     def make_empty_intermediate_tensors(
         self, batch_size: int, dtype: torch.dtype, device: torch.device
     ) -> IntermediateTensors:
@@ -1403,9 +1702,9 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
         input_tokens: list[int],
         mm_features: list[MultiModalFeatureSpec] | None = None,
         *,
-        hf_config: PretrainedConfig,
-        image_grid_thw: list[list[int]] | torch.Tensor,
-        video_grid_thw: list[list[int]] | torch.Tensor,
+        hf_config: PretrainedConfig | None = None,
+        image_grid_thw: list[list[int]] | torch.Tensor | None = None,
+        video_grid_thw: list[list[int]] | torch.Tensor | None = None,
         second_per_grid_ts: list[float] | None = None,
         context_len: int = 0,
         seq_len: int | None = None,
@@ -1415,19 +1714,20 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
         """Compute mRoPE positions for HunyuanImage-3.
 
         Maps the original model's build_2d_rope logic into vLLM's 3-dim
-        mRoPE position tensor [3, seq_len] where dim-0 is temporal (unused,
-        kept equal to 1D), dim-1 is height, and dim-2 is width.
+        mRoPE position tensor ``[3, seq_len]`` where dim-1 is height and
+        dim-2 is width.  dim-0 is unused (temporal) and kept equal to 1D.
 
-        For text tokens and auxiliary image tokens (timestep, ViT):
+        For text tokens and auxiliary image tokens (timestep, separators):
             All three dims get the same flat 1D position id.
-        For VAE image tokens:
-            dim-0 (T): flat 1D position id at the image start
+        For VAE / ViT image tokens:
+            dim-0 (T): flat 1D position id at the region start
             dim-1 (H): 2D y-position using build_2d_rope centering
             dim-2 (W): 2D x-position using build_2d_rope centering
         """
 
-        # Extract per-image VAE grid dims from mm_features
+        # Extract per-image VAE and ViT grid dims from mm_features
         vae_grids: list[tuple[int, int]] = []
+        vit_grids: list[tuple[int, int]] = []
         if mm_features is not None:
             for mm_feature in mm_features:
                 mm_item = mm_feature.data
@@ -1438,20 +1738,22 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
                 if vae_hw is not None:
                     grid = vae_hw.tolist()
                     vae_grids.append((int(grid[0]), int(grid[1])))
+                vit_hw = mm_input.get("vit_spatial_shapes")
+                if vit_hw is not None:
+                    grid = vit_hw.tolist()
+                    vit_grids.append((int(grid[0]), int(grid[1])))
 
-        # Identify image token ids (cached from __init__)
         img_token_id = self._mrope_img_token_id
         boi_token_id = self._mrope_boi_token_id
         eoi_token_id = self._mrope_eoi_token_id
         joint_img_sep_token_id = self._mrope_joint_img_sep_token_id
-        max_num_patches = self._mrope_max_num_patches
 
         # Build position arrays
-        t_pos = []  # temporal (same as 1D for this model)
-        h_pos = []  # height
-        w_pos = []  # width
+        t_pos: list[int] = []  # temporal (same as 1D for this model)
+        h_pos: list[int] = []  # height
+        w_pos: list[int] = []  # width
 
-        pos = 0  # current 1D position counter
+        pos = 0
         image_idx = 0
         i = 0
         n = len(input_tokens)
@@ -1463,7 +1765,7 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
                 # Found start of image block.
                 # Structure: <boi> <size> <ratio> <img>*timestep <img>*vae
                 #            <joint_img_sep> <img>*vit <eoi>
-                # Assign <boi> a flat position
+                # <boi> token
                 t_pos.append(pos)
                 h_pos.append(pos)
                 w_pos.append(pos)
@@ -1494,16 +1796,12 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
                     pos += 1
                     i += 1
 
-                # VAE tokens: get grid dims
+                # VAE tokens: 2D grid positions
                 if image_idx < len(vae_grids):
                     vae_h, vae_w = vae_grids[image_idx]
                 else:
                     vae_h, vae_w = 0, 0
-                image_idx += 1
-
-                # Assign 2D positions to VAE tokens using build_2d_rope
-                # centering logic
-                L = pos  # position at start of VAE region
+                L = pos
                 wh = vae_w * vae_h
                 beta_y = L + (wh - vae_h) / 2
                 beta_x = L + (wh - vae_w) / 2
@@ -1511,12 +1809,12 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
                 for row in range(vae_h):
                     for col in range(vae_w):
                         if i < n and input_tokens[i] == img_token_id:
-                            t_pos.append(L)  # temporal stays flat
+                            t_pos.append(L)
                             h_pos.append(int(beta_y + row))
                             w_pos.append(int(beta_x + col))
                             i += 1
 
-                pos = L + wh  # advance past VAE region
+                pos = L + wh
 
                 # <joint_img_sep> token
                 if i < n and input_tokens[i] == joint_img_sep_token_id:
@@ -1526,15 +1824,34 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
                     pos += 1
                     i += 1
 
-                # ViT tokens (max_num_patches <img> tokens) — flat 1D
-                vit_consumed = 0
-                while i < n and input_tokens[i] == img_token_id and vit_consumed < max_num_patches:
+                # ViT tokens: 2D grid positions
+                if image_idx < len(vit_grids):
+                    vit_h, vit_w = vit_grids[image_idx]
+                else:
+                    vit_h, vit_w = 0, 0
+                L = pos
+                wh = vit_w * vit_h
+                beta_y = L + (wh - vit_h) / 2
+                beta_x = L + (wh - vit_w) / 2
+
+                for row in range(vit_h):
+                    for col in range(vit_w):
+                        if i < n and input_tokens[i] == img_token_id:
+                            t_pos.append(L)
+                            h_pos.append(int(beta_y + row))
+                            w_pos.append(int(beta_x + col))
+                            i += 1
+
+                pos = L + wh
+
+                # Remaining ViT padding tokens (when max_num_patches >
+                # vit_h * vit_w) get flat 1D positions.
+                while i < n and input_tokens[i] == img_token_id:
                     t_pos.append(pos)
                     h_pos.append(pos)
                     w_pos.append(pos)
                     pos += 1
                     i += 1
-                    vit_consumed += 1
 
                 # <eoi> token
                 if i < n and input_tokens[i] == eoi_token_id:
@@ -1544,6 +1861,7 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
                     pos += 1
                     i += 1
 
+                image_idx += 1
             else:
                 # Regular text token — flat 1D position
                 t_pos.append(pos)

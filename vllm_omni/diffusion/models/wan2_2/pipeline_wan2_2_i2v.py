@@ -24,12 +24,16 @@ from vllm_omni.diffusion.distributed.utils import get_local_device
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
 from vllm_omni.diffusion.models.interface import SupportImageInput
 from vllm_omni.diffusion.models.progress_bar import ProgressBarMixin, _is_rank_zero
-from vllm_omni.diffusion.models.schedulers import FlowUniPCMultistepScheduler
 from vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2 import (
+    build_wan_scheduler,
     create_transformer_from_config,
     load_transformer_config,
+    resolve_wan_flow_shift,
+    resolve_wan_sample_solver,
     retrieve_latents,
 )
+from vllm_omni.diffusion.postprocess import interpolate_video_tensor
+from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import DiffusionPipelineProfilerMixin
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.inputs.data import OmniTextPrompt
 from vllm_omni.platforms import current_omni_platform
@@ -71,10 +75,23 @@ def get_wan22_i2v_post_process_func(
     def post_process_func(
         video: torch.Tensor,
         output_type: str = "np",
+        sampling_params=None,
     ):
         if output_type == "latent":
             return video
-        return video_processor.postprocess_video(video, output_type=output_type)
+        custom_output = {}
+        if sampling_params is not None and getattr(sampling_params, "enable_frame_interpolation", False):
+            video, multiplier = interpolate_video_tensor(
+                video,
+                exp=sampling_params.frame_interpolation_exp,
+                scale=sampling_params.frame_interpolation_scale,
+                model_path=sampling_params.frame_interpolation_model_path,
+            )
+            custom_output["video_fps_multiplier"] = multiplier
+        return {
+            "video": video_processor.postprocess_video(video, output_type=output_type),
+            "custom_output": custom_output,
+        }
 
     return post_process_func
 
@@ -141,7 +158,9 @@ def get_wan22_i2v_pre_process_func(
     return pre_process_func
 
 
-class Wan22I2VPipeline(nn.Module, SupportImageInput, CFGParallelMixin, ProgressBarMixin):
+class Wan22I2VPipeline(
+    nn.Module, SupportImageInput, CFGParallelMixin, ProgressBarMixin, DiffusionPipelineProfilerMixin
+):
     """
     Wan2.2 Image-to-Video Pipeline.
 
@@ -214,7 +233,7 @@ class Wan22I2VPipeline(nn.Module, SupportImageInput, CFGParallelMixin, ProgressB
 
         # VAE
         self.vae = DistributedAutoencoderKLWan.from_pretrained(
-            model, subfolder="vae", torch_dtype=torch.float32, local_files_only=local_files_only
+            model, subfolder="vae", torch_dtype=dtype, local_files_only=local_files_only
         ).to(self.device)
 
         # Transformers (weights loaded via load_weights)
@@ -227,13 +246,9 @@ class Wan22I2VPipeline(nn.Module, SupportImageInput, CFGParallelMixin, ProgressB
         else:
             self.transformer_2 = None
 
-        # Initialize UniPC scheduler
-        flow_shift = od_config.flow_shift if od_config.flow_shift is not None else 5.0  # default for 720p
-        self.scheduler = FlowUniPCMultistepScheduler(
-            num_train_timesteps=1000,
-            shift=flow_shift,
-            prediction_type="flow_prediction",
-        )
+        self._sample_solver = "unipc"
+        self._flow_shift = od_config.flow_shift if od_config.flow_shift is not None else 5.0
+        self.scheduler = build_wan_scheduler(self._sample_solver, self._flow_shift)
 
         # VAE scale factors
         self.vae_scale_factor_temporal = self.vae.config.scale_factor_temporal if hasattr(self.vae, "config") else 4
@@ -249,6 +264,9 @@ class Wan22I2VPipeline(nn.Module, SupportImageInput, CFGParallelMixin, ProgressB
         self._guidance_scale_2 = None
         self._num_timesteps = None
         self._current_timestep = None
+        self.setup_diffusion_pipeline_profiler(
+            enable_diffusion_pipeline_profiler=self.od_config.enable_diffusion_pipeline_profiler
+        )
 
     @property
     def guidance_scale(self):
@@ -434,6 +452,13 @@ class Wan22I2VPipeline(nn.Module, SupportImageInput, CFGParallelMixin, ProgressB
             current_omni_platform.synchronize()
             _t_img_enc_ms = (time.perf_counter() - _t_img_enc_start) * 1000
 
+        sample_solver = resolve_wan_sample_solver(req, default=self._sample_solver)
+        flow_shift = resolve_wan_flow_shift(req, self.od_config)
+        if sample_solver != self._sample_solver or abs(flow_shift - self._flow_shift) > 1e-6:
+            self.scheduler = build_wan_scheduler(sample_solver, flow_shift)
+            self._sample_solver = sample_solver
+            self._flow_shift = flow_shift
+
         # Timesteps
         self.scheduler.set_timesteps(num_steps, device=device)
         timesteps = self.scheduler.timesteps
@@ -610,7 +635,9 @@ class Wan22I2VPipeline(nn.Module, SupportImageInput, CFGParallelMixin, ProgressB
                     _t_pipeline_wall_ms - _t_stages_sum,
                 )
 
-        return DiffusionOutput(output=output)
+        return DiffusionOutput(
+            output=output, stage_durations=self.stage_durations if hasattr(self, "stage_durations") else None
+        )
 
     def predict_noise(self, current_model: nn.Module | None = None, **kwargs: Any) -> torch.Tensor:
         """

@@ -185,7 +185,7 @@ def calculate_metrics(
                     # Note : this may inflate the output token count slightly
                     output_len = len(tokenizer(outputs[i].generated_text, add_special_tokens=False).input_ids)
             actual_output_lens.append(output_len)
-            total_input += input_requests[i].prompt_len
+            total_input += outputs[i].prompt_len
             tpot = 0
             if output_len > 1:
                 latency_minus_ttft = outputs[i].text_latency - outputs[i].ttft
@@ -228,8 +228,8 @@ def calculate_metrics(
                 good_completed += 1
 
     if completed == 0:
-        warnings.formatwarning = (
-            lambda msg, category, filename, lineno, line=None: f"{filename}:{lineno}: {category.__name__}: {msg}\n"
+        warnings.formatwarning = lambda msg, category, filename, lineno, line=None: (
+            f"{filename}:{lineno}: {category.__name__}: {msg}\n"
         )
         warnings.warn(
             "All requests failed. This is likely due to a misconfiguration on the benchmark arguments.",
