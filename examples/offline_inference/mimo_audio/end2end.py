@@ -354,7 +354,7 @@ def parse_args():
         "--text",
         "-t",
         type=str,
-        default="The weather is so nice today.",
+        default="",
         help="input text",
     )
     parser.add_argument(
