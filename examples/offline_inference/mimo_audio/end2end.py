@@ -309,7 +309,10 @@ def main(args):
             lines.append("Prompt:\n")
             lines.append(str(prompt_text) + "\n")
             lines.append("vllm_text_output:\n")
-            lines.append(str(text_output).strip() + "\n")
+            output_text = str(text_output)
+            if "<chinese>" in output_text or "<english>" in output_text:
+                output_text = output_text.replace("<chinese>", "").replace("<english>", "").strip()
+            lines.append(output_text + "\n")
             try:
                 with open(out_txt, "w", encoding="utf-8") as f:
                     print("lines", lines)
