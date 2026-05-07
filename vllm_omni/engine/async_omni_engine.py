@@ -261,6 +261,8 @@ class AsyncOmniEngine:
             ea_dict.pop("model", None)
             kwargs = {**ea_dict, **kwargs}
 
+        self.tokenizer: str | None = kwargs.get("tokenizer")
+
         # ------------------------------------------------------------------ #
         # Single-stage mode detection                                        #
         # ------------------------------------------------------------------ #
@@ -485,6 +487,7 @@ class AsyncOmniEngine:
                     stage_cfg,
                     self.model,
                     stage_connector_spec=stage_connector_spec,
+                    cli_tokenizer=getattr(self, "tokenizer", None),
                 )
                 omni_conn_cfg, omni_from, omni_to = omni_kv_connector
                 if omni_conn_cfg:
@@ -654,6 +657,7 @@ class AsyncOmniEngine:
                                 stage_cfg,
                                 self.model,
                                 stage_connector_spec=plan.stage_connector_spec,
+                                cli_tokenizer=getattr(self, "tokenizer", None),
                             )
                             lock_fds = acquire_device_locks(
                                 plan.metadata.stage_id,
@@ -1455,6 +1459,10 @@ class AsyncOmniEngine:
             "diffusion_load_format": kwargs.get("diffusion_load_format", "default"),
             "custom_pipeline_args": kwargs.get("custom_pipeline_args", None),
             "worker_extension_cls": kwargs.get("worker_extension_cls", None),
+            "trust_remote_code": (False if kwargs.get("trust_remote_code") is None else kwargs["trust_remote_code"]),
+            "distributed_executor_backend": (
+                "mp" if kwargs.get("distributed_executor_backend") is None else kwargs["distributed_executor_backend"]
+            ),
             "enable_sleep_mode": kwargs.get("enable_sleep_mode", False),
             "enable_multithread_weight_load": kwargs.get("enable_multithread_weight_load", True),
             "num_weight_load_threads": kwargs.get("num_weight_load_threads", 4),
