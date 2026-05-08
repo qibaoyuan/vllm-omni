@@ -150,7 +150,7 @@ class CUDAGraphMiMoDecoderWrapper:
                 with torch.no_grad():
                     _ = self.tokenizer.decode_fixed(dummy, size, vocoder_attn_mask=mask)
 
-        torch.cuda.synchronize(device)
+        torch.accelerator.synchronize(device)
 
         expected = len(self.capture_sizes) * len(self._capture_code_rows)
         for n_rows in self._capture_code_rows:
@@ -184,7 +184,7 @@ class CUDAGraphMiMoDecoderWrapper:
 
         with torch.no_grad():
             _ = self.tokenizer.decode_fixed(static_codes, size, vocoder_attn_mask=mask)
-        torch.cuda.synchronize(device)
+        torch.accelerator.synchronize(device)
 
         graph = CUDAGraph()
         with torch.no_grad():
